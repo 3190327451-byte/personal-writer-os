@@ -1,0 +1,2288 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import {
+  EditorContent,
+  useEditor,
+  type Editor,
+  type JSONContent,
+} from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
+import Highlight from "@tiptap/extension-highlight";
+import Placeholder from "@tiptap/extension-placeholder";
+import { Color, FontSize, TextStyle } from "@tiptap/extension-text-style";
+import { useLiveQuery } from "dexie-react-hooks";
+import {
+  db,
+  exportBackup,
+  importBackup,
+  saveRollingSnapshot,
+} from "./lib/db";
+import {
+  CATEGORY_META,
+  EMPTY_DOCUMENT,
+  type Material,
+  type SessionMood,
+  type SessionSegment,
+  type Work,
+  type WorkCategory,
+  type WorkSnapshot,
+  type WritingSession,
+} from "./lib/types";
+import {
+  countWords,
+  formatDateTime,
+  formatDuration,
+  localDateKey,
+  nextMidnight,
+  sessionDuration,
+} from "./lib/utils";
+
+type Navigate = (path: string) => void;
+
+function useLocalRouter() {
+  const subscribe = useCallback((onChange: () => void) => {
+    window.addEventListener("popstate", onChange);
+    return () => window.removeEventListener("popstate", onChange);
+  }, []);
+  const path = useSyncExternalStore(
+    subscribe,
+    () => window.location.pathname,
+    () => "/",
+  );
+
+  const navigate = useCallback((nextPath: string) => {
+    window.history.pushState({}, "", nextPath);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  return { path, navigate };
+}
+
+function registerPwa() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  }
+  if (navigator.storage?.persist) {
+    navigator.storage.persist().catch(() => undefined);
+  }
+}
+
+function DismissibleDetails({
+  className,
+  summary,
+  summaryAriaLabel,
+  children,
+}: {
+  className: string;
+  summary: ReactNode;
+  summaryAriaLabel?: string;
+  children: ReactNode;
+}) {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    const dismissOnOutsidePress = (event: PointerEvent) => {
+      const details = detailsRef.current;
+      if (
+        details?.open &&
+        event.target instanceof Node &&
+        !details.contains(event.target)
+      ) {
+        details.open = false;
+      }
+    };
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && detailsRef.current?.open) {
+        detailsRef.current.open = false;
+      }
+    };
+    document.addEventListener("pointerdown", dismissOnOutsidePress);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnOutsidePress);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, []);
+
+  return (
+    <details ref={detailsRef} className={className}>
+      <summary aria-label={summaryAriaLabel}>{summary}</summary>
+      {children}
+    </details>
+  );
+}
+
+function parseTags(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,，#\n]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 12);
+}
+
+function documentLinks(content: JSONContent): string[] {
+  const links = new Set<string>();
+  const visit = (node: JSONContent) => {
+    node.marks?.forEach((mark) => {
+      if (
+        mark.type === "link" &&
+        typeof mark.attrs?.href === "string" &&
+        /^https?:\/\//i.test(mark.attrs.href)
+      ) {
+        links.add(mark.attrs.href);
+      }
+    });
+    node.content?.forEach(visit);
+  };
+  visit(content);
+  return [...links];
+}
+
+function materialTitle(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+async function syncLinkedMaterials(content: JSONContent) {
+  const links = documentLinks(content);
+  const now = Date.now();
+  for (const url of links) {
+    const existing = await db.materials.where("url").equals(url).first();
+    if (!existing) {
+      await db.materials.add({
+        id: crypto.randomUUID(),
+        title: materialTitle(url),
+        url,
+        note: "",
+        tags: [],
+        source: "reference",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+}
+
+function useRetroSound() {
+  const enabled =
+    useLiveQuery(() => db.settings.get("retro-sound"), [], undefined)?.value ===
+    true;
+  return useCallback(
+    (kind: "open" | "save" | "complete") => {
+      if (!enabled) return;
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioContextClass) return;
+      const context = new AudioContextClass();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const frequencies = { open: 520, save: 660, complete: 780 };
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequencies[kind];
+      gain.gain.setValueAtTime(0.035, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(
+        0.0001,
+        context.currentTime + 0.12,
+      );
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.12);
+      oscillator.addEventListener("ended", () => context.close());
+    },
+    [enabled],
+  );
+}
+
+export default function WriterApp() {
+  const { path, navigate } = useLocalRouter();
+
+  useEffect(() => {
+    registerPwa();
+  }, []);
+
+  const route = useMemo(() => {
+    const settlement = path.match(
+      /^\/write\/([^/]+)\/settlement\/([^/]+)\/?$/,
+    );
+    if (settlement) {
+      return {
+        name: "settlement" as const,
+        workId: settlement[1],
+        sessionId: settlement[2],
+      };
+    }
+    const editor = path.match(/^\/write\/([^/]+)\/?$/);
+    if (editor && editor[1] !== "new") {
+      return { name: "editor" as const, workId: editor[1] };
+    }
+    if (path === "/write/new") return { name: "new" as const };
+    if (path === "/write") return { name: "write" as const };
+    if (path === "/works") return { name: "works" as const };
+    if (path === "/dashboard") return { name: "dashboard" as const };
+    if (path === "/materials") return { name: "materials" as const };
+    return { name: "home" as const };
+  }, [path]);
+
+  const isEditor = route.name === "editor";
+
+  return (
+    <div className={isEditor ? "app-shell app-shell--editor" : "app-shell"}>
+      <Header path={path} navigate={navigate} compact={isEditor} />
+      <main className={isEditor ? "main main--editor" : "main"}>
+        {route.name === "home" && <HomePage navigate={navigate} />}
+        {route.name === "write" && <WorkPickerPage navigate={navigate} />}
+        {route.name === "new" && <NewWorkPage navigate={navigate} />}
+        {route.name === "works" && <WorksPage navigate={navigate} />}
+        {route.name === "editor" && (
+          <EditorPage workId={route.workId} navigate={navigate} />
+        )}
+        {route.name === "settlement" && (
+          <SettlementPage
+            workId={route.workId}
+            sessionId={route.sessionId}
+            navigate={navigate}
+          />
+        )}
+        {route.name === "dashboard" && <DashboardPage navigate={navigate} />}
+        {route.name === "materials" && <MaterialsPage navigate={navigate} />}
+      </main>
+      {!isEditor && <QuietFooter />}
+    </div>
+  );
+}
+
+function Header({
+  path,
+  navigate,
+  compact,
+}: {
+  path: string;
+  navigate: Navigate;
+  compact: boolean;
+}) {
+  const navItems = [
+    { label: "Home", href: "/" },
+    { label: "Write", href: "/write" },
+    { label: "Works", href: "/works" },
+    { label: "Overview", href: "/dashboard" },
+    { label: "Materials", href: "/materials" },
+  ];
+
+  return (
+    <header className={compact ? "header header--compact" : "header"}>
+      <button
+        className="brand"
+        onClick={() => navigate("/")}
+        aria-label="Return home"
+      >
+        <span className="brand-mark" aria-hidden="true">
+          P
+        </span>
+        <span>
+          <strong>Personal Writer OS</strong>
+          <small>quiet writing · lasting growth</small>
+        </span>
+      </button>
+      {!compact && (
+        <nav className="top-nav" aria-label="Main navigation">
+          {navItems.map((item) => {
+            const active =
+              item.href === "/"
+                ? path === "/"
+                : path === item.href || path.startsWith(`${item.href}/`);
+            return (
+              <button
+                key={item.href}
+                className={active ? "nav-link is-active" : "nav-link"}
+                onClick={() => navigate(item.href)}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+      <DataMenu />
+    </header>
+  );
+}
+
+function DataMenu() {
+  const [message, setMessage] = useState("");
+  const soundSetting = useLiveQuery(
+    () => db.settings.get("retro-sound"),
+    [],
+  );
+  const soundEnabled = soundSetting?.value === true;
+
+  const handleExport = async () => {
+    const backup = await exportBackup();
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `personal-writer-os-${localDateKey()}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setMessage("Backup exported");
+  };
+
+  const handleImport = async (file: File | undefined) => {
+    if (!file) return;
+    const approved = window.confirm(
+      "Newer records in this backup will be merged into this device. Continue?",
+    );
+    if (!approved) return;
+    try {
+      await importBackup(JSON.parse(await file.text()));
+      setMessage("Backup imported");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Import failed");
+    }
+  };
+
+  return (
+    <DismissibleDetails
+      className="data-menu"
+      summary="Local data"
+      summaryAriaLabel="Local data and preferences"
+    >
+      <div className="data-popover">
+        <div className="popover-titlebar">
+          <span>personal_writer.cfg</span>
+          <i aria-hidden="true">×</i>
+        </div>
+        <p>Your writing stays on this device. Export a backup from time to time.</p>
+        <button onClick={handleExport}>Export all data</button>
+        <label className="file-button">
+          Import a backup
+          <input
+            type="file"
+            accept="application/json,.json"
+            onChange={(event) => handleImport(event.target.files?.[0])}
+          />
+        </label>
+        <label className="sound-toggle">
+          <input
+            type="checkbox"
+            checked={soundEnabled}
+            onChange={async (event) => {
+              const enabled = event.target.checked;
+              await db.settings.put({
+                key: "retro-sound",
+                value: enabled,
+                updatedAt: Date.now(),
+              });
+              setMessage(enabled ? "System sounds on" : "System sounds off");
+            }}
+          />
+          <span>Retro system sounds</span>
+          <small>{soundEnabled ? "ON" : "OFF"}</small>
+        </label>
+        {message && <small role="status">{message}</small>}
+      </div>
+    </DismissibleDetails>
+  );
+}
+
+function HomePage({ navigate }: { navigate: Navigate }) {
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const sessions = useLiveQuery(() => db.sessions.toArray(), [], []);
+  const recentWorks = [...works]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 3);
+  const todaySessions = sessions.filter(
+    (session) =>
+      session.state === "ended" &&
+      localDateKey(session.startedAt) === localDateKey(),
+  );
+  const todayDuration = todaySessions.reduce(
+    (sum, session) => sum + session.durationMs,
+    0,
+  );
+  const activeSession = sessions
+    .filter((session) => session.state !== "ended")
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
+  const continueWork =
+    works.find((work) => work.id === activeSession?.workId) ?? recentWorks[0];
+
+  return (
+    <section className="home-page">
+      <div className="welcome-block">
+        <p className="eyebrow">{todayGreeting()}</p>
+        <h1>
+          <span>write something.</span>
+          <small>give your inspiration a place to stay.</small>
+        </h1>
+        <div className="home-actions">
+          <button
+            className="button button--primary"
+            onClick={() =>
+              navigate(continueWork ? `/write/${continueWork.id}` : "/write")
+            }
+          >
+            Continue writing
+          </button>
+          <button
+            className="button button--secondary"
+            onClick={() => navigate("/write/new")}
+          >
+            New work
+          </button>
+        </div>
+      </div>
+
+      <aside className="today-card">
+        <div className="window-titlebar">
+          <span>today.log</span>
+          <i aria-hidden="true">_ □ ×</i>
+        </div>
+        <span>Writing today</span>
+        {todayDuration > 0 ? (
+          <>
+            <strong>{Math.max(1, Math.round(todayDuration / 60000))} min</strong>
+            <small>{todaySessions.length} quiet session{todaySessions.length === 1 ? "" : "s"}</small>
+          </>
+        ) : (
+          <small className="quiet-status">No writing yet today</small>
+        )}
+      </aside>
+
+      <div className="recent-section">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Recently edited</p>
+          </div>
+          <button className="text-button" onClick={() => navigate("/works")}>
+            Open works
+          </button>
+        </div>
+        {recentWorks.length ? (
+          <div className="work-grid">
+            {recentWorks.map((work) => (
+              <WorkCard key={work.id} work={work} navigate={navigate} />
+            ))}
+          </div>
+        ) : (
+          <EmptyWorks navigate={navigate} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function todayGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 6) return "late night session";
+  if (hour < 12) return "good morning";
+  if (hour < 18) return "good afternoon";
+  return "good evening";
+}
+
+function WorkPickerPage({ navigate }: { navigate: Navigate }) {
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const sorted = [...works].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return (
+    <section className="content-page">
+      <div className="page-heading">
+        <p className="eyebrow">Personal Writer OS</p>
+        <h1>write</h1>
+      </div>
+      <div className="section-heading section-heading--compact">
+        <h2>Choose a work</h2>
+        <button
+          className="button button--primary"
+          onClick={() => navigate("/write/new")}
+        >
+          New work
+        </button>
+      </div>
+      {sorted.length ? (
+        <div className="work-grid">
+          {sorted.map((work) => (
+            <WorkCard key={work.id} work={work} navigate={navigate} />
+          ))}
+        </div>
+      ) : (
+        <EmptyWorks navigate={navigate} />
+      )}
+    </section>
+  );
+}
+
+function WorksPage({ navigate }: { navigate: Navigate }) {
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const [sort, setSort] = useState<"updated" | "created" | "words">("updated");
+  const [category, setCategory] = useState<WorkCategory>("social-insight");
+  const [tag, setTag] = useState("");
+  const [query, setQuery] = useState("");
+  const sorted = [...works].sort((a, b) => {
+    if (sort === "created") return b.createdAt - a.createdAt;
+    if (sort === "words") return b.wordCount - a.wordCount;
+    return b.updatedAt - a.updatedAt;
+  });
+  const categoryWorks = sorted.filter((work) => work.category === category);
+  const categoryTags = Array.from(
+    new Set(categoryWorks.flatMap((work) => work.tags ?? [])),
+  ).sort((a, b) => a.localeCompare(b));
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleWorks = categoryWorks.filter((work) => {
+    const matchesTag = !tag || (work.tags ?? []).includes(tag);
+    const matchesQuery =
+      !normalizedQuery ||
+      work.title.toLocaleLowerCase().includes(normalizedQuery) ||
+      work.plainText.toLocaleLowerCase().includes(normalizedQuery) ||
+      (work.tags ?? []).some((item) =>
+        item.toLocaleLowerCase().includes(normalizedQuery),
+      );
+    return matchesTag && matchesQuery;
+  });
+
+  return (
+    <section className="content-page">
+      <div className="page-heading page-heading--row">
+        <div>
+          <p className="eyebrow">Personal Writer OS</p>
+          <h1>works</h1>
+        </div>
+        <button
+          className="button button--primary"
+          onClick={() => navigate("/write/new")}
+        >
+          New work
+        </button>
+      </div>
+      <div className="category-switcher" role="tablist" aria-label="Writing types">
+        {(Object.keys(CATEGORY_META) as WorkCategory[]).map((item) => (
+          <button
+            key={item}
+            role="tab"
+            aria-selected={category === item}
+            className={`category-tab theme-${item}${category === item ? " is-active" : ""}`}
+            onClick={() => {
+              setCategory(item);
+              setTag("");
+            }}
+          >
+            <span>{CATEGORY_META[item].shortName}</span>
+            <strong>{CATEGORY_META[item].name}</strong>
+            <small>{works.filter((work) => work.category === item).length}</small>
+          </button>
+        ))}
+      </div>
+      <div className="library-toolbar">
+        <label className="library-search">
+          <span className="sr-only">Search works</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search title, text, or tag…"
+          />
+        </label>
+        <label>
+          Sort
+          <select
+            value={sort}
+            onChange={(event) =>
+              setSort(event.target.value as "updated" | "created" | "words")
+            }
+          >
+            <option value="updated">Recently edited</option>
+            <option value="created">Date created</option>
+            <option value="words">Word count</option>
+          </select>
+        </label>
+      </div>
+      <div className="tag-filter">
+        <button className={!tag ? "is-active" : ""} onClick={() => setTag("")}>
+          all
+        </button>
+        {categoryTags.map((item) => (
+          <button
+            key={item}
+            className={tag === item ? "is-active" : ""}
+            onClick={() => setTag(item)}
+          >
+            #{item}
+          </button>
+        ))}
+        {!categoryTags.length && <span>No tags in this writing type yet.</span>}
+      </div>
+      {visibleWorks.length ? (
+        <div className="category-groups">
+          <div className="category-title">
+            <span className={`category-dot theme-${category}`} />
+            <h2>{CATEGORY_META[category].name}</h2>
+            <small>{visibleWorks.length}</small>
+          </div>
+          <div className="work-grid">
+            {visibleWorks.map((work) => (
+              <WorkCard key={work.id} work={work} navigate={navigate} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="empty-filter">Nothing here yet.</div>
+      )}
+    </section>
+  );
+}
+
+function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
+  return (
+    <button
+      className={`work-card theme-${work.category}`}
+      onClick={() => navigate(`/write/${work.id}`)}
+    >
+      <span className="work-card-category">
+        {CATEGORY_META[work.category].name}
+      </span>
+      <strong>{work.title || "Untitled work"}</strong>
+      <p>{work.plainText.slice(0, 72) || "A blank page, ready when you are."}</p>
+      {!!work.tags?.length && (
+        <span className="work-card-tags">
+          {work.tags.slice(0, 3).map((item) => `#${item}`).join("  ")}
+        </span>
+      )}
+      <span className="work-card-meta">
+        {work.wordCount} words · {formatDateTime(work.updatedAt)}
+      </span>
+    </button>
+  );
+}
+
+function EmptyWorks({ navigate }: { navigate: Navigate }) {
+  return (
+    <div className="empty-works">
+      <span aria-hidden="true">✦</span>
+      <h3>No works yet</h3>
+      <p>Begin with a document that can grow with you.</p>
+      <button
+        className="button button--secondary"
+        onClick={() => navigate("/write/new")}
+      >
+        Create your first work
+      </button>
+    </div>
+  );
+}
+
+function NewWorkPage({ navigate }: { navigate: Navigate }) {
+  const [title, setTitle] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
+  const [category, setCategory] =
+    useState<WorkCategory>("social-insight");
+  const [creating, setCreating] = useState(false);
+
+  const createWork = async () => {
+    if (creating) return;
+    setCreating(true);
+    const now = Date.now();
+    const id = crypto.randomUUID();
+    await db.works.add({
+      id,
+      title: title.trim() || "Untitled work",
+      category,
+      tags: parseTags(tagsInput),
+      contentJSON: EMPTY_DOCUMENT,
+      plainText: "",
+      wordCount: 0,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+    navigate(`/write/${id}`);
+  };
+
+  return (
+    <section className="new-work-page">
+      <button className="back-button" onClick={() => navigate("/write")}>
+        ← write
+      </button>
+      <div className="new-work-panel">
+        <p className="eyebrow">new_document.exe</p>
+        <h1>Create a work</h1>
+        <label className="field">
+          <span>Title</span>
+          <input
+            autoFocus
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Untitled is fine"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") createWork();
+            }}
+          />
+        </label>
+        <label className="field field--tags">
+          <span>Tags · separated by commas</span>
+          <input
+            value={tagsInput}
+            onChange={(event) => setTagsInput(event.target.value)}
+            placeholder="memory, city, artificial intelligence"
+          />
+        </label>
+        <fieldset className="category-picker">
+          <legend>Writing type</legend>
+          <div className="category-options">
+            {(Object.keys(CATEGORY_META) as WorkCategory[]).map((item) => (
+              <label
+                key={item}
+                className={
+                  category === item
+                    ? `category-option theme-${item} is-selected`
+                    : `category-option theme-${item}`
+                }
+              >
+                <input
+                  type="radio"
+                  name="category"
+                  value={item}
+                  checked={category === item}
+                  onChange={() => setCategory(item)}
+                />
+                <strong>{CATEGORY_META[item].name}</strong>
+                <small>{CATEGORY_META[item].description}</small>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <button
+          className="button button--primary button--wide"
+          onClick={createWork}
+          disabled={creating}
+        >
+          {creating ? "Opening a new window…" : "Create and open"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function EditorPage({
+  workId,
+  navigate,
+}: {
+  workId: string;
+  navigate: Navigate;
+}) {
+  const [work, setWork] = useState<Work | null | undefined>(undefined);
+  const [recovered, setRecovered] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const storedWork = await db.works.get(workId);
+      if (!active) return;
+      if (!storedWork || storedWork.deletedAt !== null) {
+        setWork(null);
+        return;
+      }
+      const draft = await db.recoveryDrafts.get(workId);
+      if (draft && draft.savedAt > storedWork.updatedAt) {
+        setWork({
+          ...storedWork,
+          title: draft.title,
+          contentJSON: draft.contentJSON,
+          plainText: draft.plainText,
+          wordCount: draft.wordCount,
+        });
+        setRecovered(true);
+      } else {
+        setWork(storedWork);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [workId]);
+
+  if (work === undefined) {
+    return <div className="loading-state">Opening work…</div>;
+  }
+  if (work === null) {
+    return (
+      <ComingSoon
+        eyebrow="file_not_found"
+        title="This work is missing"
+        description="It may have been deleted, or it may only exist on another device."
+      />
+    );
+  }
+
+  return (
+    <WritingWorkspace
+      key={work.id}
+      initialWork={work}
+      recovered={recovered}
+      navigate={navigate}
+    />
+  );
+}
+
+function WritingWorkspace({
+  initialWork,
+  recovered,
+  navigate,
+}: {
+  initialWork: Work;
+  recovered: boolean;
+  navigate: Navigate;
+}) {
+  const [title, setTitle] = useState(initialWork.title);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "dirty">(
+    recovered ? "dirty" : "saved",
+  );
+  const [wordCount, setWordCount] = useState(initialWork.wordCount);
+  const [recoveryNotice, setRecoveryNotice] = useState(recovered);
+  const [typingSignal, setTypingSignal] = useState(0);
+  const [tags, setTags] = useState(initialWork.tags ?? []);
+  const [tagDraft, setTagDraft] = useState("");
+  const latestRef = useRef({
+    title: initialWork.title,
+    contentJSON: initialWork.contentJSON,
+    plainText: initialWork.plainText,
+    wordCount: initialWork.wordCount,
+  });
+  const dirtyRef = useRef(recovered);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closedSnapshotRef = useRef(false);
+  const noteTyping = useCallback(() => {
+    setTypingSignal((signal) => signal + 1);
+  }, []);
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions: [
+      StarterKit.configure({ link: false }),
+      TextStyle,
+      FontSize,
+      Color,
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        defaultProtocol: "https",
+        protocols: ["http", "https", "mailto"],
+      }),
+      Highlight.configure({ multicolor: true }),
+      Placeholder.configure({
+        placeholder: "Start here. One sentence is enough.",
+      }),
+    ],
+    content: initialWork.contentJSON,
+    editorProps: {
+      attributes: {
+        class: "prose-editor",
+        spellcheck: "true",
+        "aria-label": "Work text",
+      },
+      handleTextInput() {
+        noteTyping();
+        return false;
+      },
+      handlePaste() {
+        noteTyping();
+        return false;
+      },
+      handleKeyDown(_view, event) {
+        if (["Backspace", "Delete", "Enter"].includes(event.key)) {
+          noteTyping();
+        }
+        return false;
+      },
+      transformPastedHTML(html) {
+        return html
+          .replace(/<(img|table|thead|tbody|tr|td|th)[^>]*>[\s\S]*?<\/\1>/gi, "")
+          .replace(/<img[^>]*>/gi, "");
+      },
+    },
+    onUpdate({ editor: currentEditor }) {
+      const plainText = currentEditor.getText({ blockSeparator: "\n" });
+      const nextWordCount = countWords(plainText);
+      latestRef.current = {
+        ...latestRef.current,
+        contentJSON: currentEditor.getJSON(),
+        plainText,
+        wordCount: nextWordCount,
+      };
+      dirtyRef.current = true;
+      setWordCount(nextWordCount);
+      setSaveStatus("dirty");
+      scheduleRecovery();
+    },
+  });
+
+  const scheduleRecovery = useCallback(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      const latest = latestRef.current;
+      db.recoveryDrafts
+        .put({
+          workId: initialWork.id,
+          ...latest,
+          savedAt: Date.now(),
+        })
+        .catch(() => undefined);
+    }, 650);
+  }, [initialWork.id]);
+
+  const flush = useCallback(
+    async (snapshotKind?: "closed") => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+      const latest = latestRef.current;
+      if (dirtyRef.current) {
+        setSaveStatus("saving");
+        const updatedAt = Date.now();
+        await db.transaction("rw", db.works, db.recoveryDrafts, async () => {
+          await db.works.update(initialWork.id, { ...latest, updatedAt });
+          await db.recoveryDrafts.delete(initialWork.id);
+        });
+        await syncLinkedMaterials(latest.contentJSON);
+        dirtyRef.current = false;
+        setSaveStatus("saved");
+      }
+      if (snapshotKind === "closed" && !closedSnapshotRef.current) {
+        closedSnapshotRef.current = true;
+        await saveRollingSnapshot({
+          workId: initialWork.id,
+          kind: "closed",
+          ...latest,
+        });
+      }
+      return latest;
+    },
+    [initialWork.id],
+  );
+
+  useEffect(() => {
+    saveRollingSnapshot({
+      workId: initialWork.id,
+      kind: "opening",
+      title: initialWork.title,
+      contentJSON: initialWork.contentJSON,
+      plainText: initialWork.plainText,
+      wordCount: initialWork.wordCount,
+    }).catch(() => undefined);
+
+    const saveInterval = window.setInterval(() => {
+      if (dirtyRef.current) flush().catch(() => undefined);
+    }, 5000);
+    const saveOnHide = () => {
+      if (document.visibilityState === "hidden" && dirtyRef.current) {
+        flush().catch(() => undefined);
+      }
+    };
+    const saveOnPageHide = () => {
+      if (dirtyRef.current) flush().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", saveOnHide);
+    window.addEventListener("pagehide", saveOnPageHide);
+    return () => {
+      window.clearInterval(saveInterval);
+      document.removeEventListener("visibilitychange", saveOnHide);
+      window.removeEventListener("pagehide", saveOnPageHide);
+      flush("closed").catch(() => undefined);
+    };
+  }, [flush, initialWork]);
+
+  const updateTitle = (nextTitle: string) => {
+    setTitle(nextTitle);
+    latestRef.current = { ...latestRef.current, title: nextTitle };
+    dirtyRef.current = true;
+    setSaveStatus("dirty");
+    scheduleRecovery();
+    noteTyping();
+  };
+
+  const applySnapshot = (snapshot: WorkSnapshot) => {
+    if (!editor) return;
+    editor.commands.setContent(snapshot.contentJSON);
+    setTitle(snapshot.title);
+    latestRef.current = {
+      title: snapshot.title,
+      contentJSON: snapshot.contentJSON,
+      plainText: snapshot.plainText,
+      wordCount: snapshot.wordCount,
+    };
+    setWordCount(snapshot.wordCount);
+    dirtyRef.current = true;
+    setSaveStatus("dirty");
+    setRecoveryNotice(false);
+  };
+
+  const restoreOpeningSnapshot = async () => {
+    const snapshots = await db.snapshots
+      .where("workId")
+      .equals(initialWork.id)
+      .toArray();
+    const snapshot = snapshots
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .find((item) => item.kind === "opening");
+    if (snapshot) applySnapshot(snapshot);
+  };
+
+  const closeWork = async () => {
+    await flush("closed");
+    navigate("/works");
+  };
+  const getCurrentWordCount = useCallback(
+    () => latestRef.current.wordCount,
+    [],
+  );
+  const addTag = async () => {
+    const nextTags = Array.from(new Set([...tags, ...parseTags(tagDraft)]));
+    if (nextTags.length === tags.length) {
+      setTagDraft("");
+      return;
+    }
+    setTags(nextTags);
+    setTagDraft("");
+    await db.works.update(initialWork.id, {
+      tags: nextTags,
+      updatedAt: nowMs(),
+    });
+  };
+  const removeTag = async (tag: string) => {
+    const nextTags = tags.filter((item) => item !== tag);
+    setTags(nextTags);
+    await db.works.update(initialWork.id, {
+      tags: nextTags,
+      updatedAt: nowMs(),
+    });
+  };
+
+  return (
+    <div className={`writing-workspace theme-${initialWork.category}`}>
+      <div className="editor-topline">
+        <button className="back-button" onClick={closeWork}>
+          ← works
+        </button>
+        <div className="editor-context">
+          <span className="editor-category">
+            {CATEGORY_META[initialWork.category].name}
+          </span>
+          <SnapshotMenu workId={initialWork.id} onRestore={applySnapshot} />
+        </div>
+        <span className={`save-indicator is-${saveStatus}`} role="status">
+          {saveStatus === "saved"
+            ? "Saved locally"
+            : saveStatus === "saving"
+              ? "Saving"
+              : "Unsaved changes"}
+        </span>
+      </div>
+
+      {recoveryNotice && (
+        <div className="recovery-banner">
+          <span>Recovered content from an interrupted session.</span>
+          <button onClick={restoreOpeningSnapshot}>Restore opening version</button>
+          <button
+            aria-label="Dismiss recovery notice"
+            onClick={() => setRecoveryNotice(false)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <div className="editor-layout">
+        <article className="paper">
+          <input
+            className="document-title"
+            value={title}
+            onChange={(event) => updateTitle(event.target.value)}
+            placeholder="Untitled work"
+            aria-label="Work title"
+          />
+          <div className="editor-tags">
+            {tags.map((tag) => (
+              <button key={tag} onClick={() => removeTag(tag)} title="Remove tag">
+                #{tag} <span>×</span>
+              </button>
+            ))}
+            <label>
+              <span className="sr-only">Add tag</span>
+              <input
+                value={tagDraft}
+                onChange={(event) => setTagDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === ",") {
+                    event.preventDefault();
+                    addTag();
+                  }
+                }}
+                onBlur={addTag}
+                placeholder="+ tag"
+              />
+            </label>
+          </div>
+          <EditorToolbar editor={editor} />
+          <EditorContent editor={editor} />
+          <div className="paper-footer">
+            <span>{wordCount} words</span>
+            <span>Autosaves every 5 seconds</span>
+          </div>
+        </article>
+        <WritingTimerPanel
+          work={initialWork}
+          currentWordCount={getCurrentWordCount}
+          flush={flush}
+          navigate={navigate}
+          autoStartSignal={typingSignal}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SnapshotMenu({
+  workId,
+  onRestore,
+}: {
+  workId: string;
+  onRestore: (snapshot: WorkSnapshot) => void;
+}) {
+  const snapshots = useLiveQuery(
+    () => db.snapshots.where("workId").equals(workId).toArray(),
+    [workId],
+    [],
+  )
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 2);
+
+  return (
+    <DismissibleDetails className="snapshot-menu" summary="Versions">
+      <div>
+        {snapshots.length ? (
+          snapshots.map((snapshot) => (
+            <button key={snapshot.id} onClick={() => onRestore(snapshot)}>
+              <strong>
+                {snapshot.kind === "opening"
+                  ? "Before this edit"
+                  : "Last closed"}
+              </strong>
+              <small>
+                {formatDateTime(snapshot.createdAt)} · {snapshot.wordCount} words
+              </small>
+            </button>
+          ))
+        ) : (
+          <span>No snapshots yet</span>
+        )}
+      </div>
+    </DismissibleDetails>
+  );
+}
+
+function EditorToolbar({
+  editor,
+}: {
+  editor: Editor | null;
+}) {
+  if (!editor) return <div className="editor-toolbar" aria-hidden="true" />;
+
+  const setLink = () => {
+    const previous = editor.getAttributes("link").href as string | undefined;
+    const url = window.prompt("Paste a web address", previous ?? "https://");
+    if (url === null) return;
+    if (!url.trim()) {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      return;
+    }
+    editor
+      .chain()
+      .focus()
+      .extendMarkRange("link")
+      .setLink({ href: url.trim() })
+      .run();
+  };
+
+  return (
+    <div className="editor-toolbar" aria-label="Text formatting toolbar">
+      <button
+        className={editor.isActive("bold") ? "is-active" : ""}
+        onClick={() => editor.chain().focus().toggleBold().run()}
+        aria-label="Bold"
+        title="Bold"
+      >
+        B
+      </button>
+      <button
+        className={editor.isActive("italic") ? "is-active" : ""}
+        onClick={() => editor.chain().focus().toggleItalic().run()}
+        aria-label="Italic"
+        title="Italic"
+      >
+        <em>I</em>
+      </button>
+      <button
+        className={editor.isActive("bulletList") ? "is-active" : ""}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          editor.chain().focus().toggleBulletList().run();
+        }}
+        aria-label="Bullet list"
+        title="Bullet list"
+      >
+        • List
+      </button>
+      <button
+        className={editor.isActive("orderedList") ? "is-active" : ""}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          editor.chain().focus().toggleOrderedList().run();
+        }}
+        aria-label="Numbered list"
+        title="Numbered list"
+      >
+        1. List
+      </button>
+      <button onClick={setLink} aria-label="Insert web link" title="Insert web link">
+        Link
+      </button>
+      <span className="toolbar-divider" />
+      <label className="toolbar-select">
+        <span className="sr-only">Font size</span>
+        <select
+          defaultValue="17px"
+          onChange={(event) =>
+            editor.chain().focus().setFontSize(event.target.value).run()
+          }
+          aria-label="Font size"
+        >
+          <option value="14px">Small</option>
+          <option value="17px">Regular</option>
+          <option value="20px">Large</option>
+          <option value="24px">XL</option>
+        </select>
+      </label>
+      <button
+        className="color-button color-button--black"
+        onClick={() => editor.chain().focus().setColor("#282724").run()}
+        aria-label="Black text"
+        title="Black text"
+      >
+        A
+      </button>
+      <button
+        className="color-button color-button--gray"
+        onClick={() => editor.chain().focus().setColor("#a6a29b").run()}
+        aria-label="Gray text"
+        title="Gray text"
+      >
+        A
+      </button>
+      <button
+        className="highlight-button highlight-button--yellow"
+        onClick={() =>
+          editor.chain().focus().toggleHighlight({ color: "#f5e7a8" }).run()
+        }
+        aria-label="Yellow highlight"
+        title="Yellow highlight"
+      >
+        Y
+      </button>
+      <button
+        className="highlight-button highlight-button--pink"
+        onClick={() =>
+          editor.chain().focus().toggleHighlight({ color: "#f4d4d8" }).run()
+        }
+        aria-label="Pink highlight"
+        title="Pink highlight"
+      >
+        P
+      </button>
+      <span className="toolbar-divider" />
+      <button
+        onClick={() => editor.chain().focus().undo().run()}
+        disabled={!editor.can().undo()}
+        aria-label="Undo"
+        title="Undo"
+      >
+        ↶
+      </button>
+      <button
+        onClick={() => editor.chain().focus().redo().run()}
+        disabled={!editor.can().redo()}
+        aria-label="Redo"
+        title="Redo"
+      >
+        ↷
+      </button>
+    </div>
+  );
+}
+
+async function finishSession(
+  session: WritingSession,
+  endAt: number,
+  reason: "manual" | "midnight-auto",
+  endWordCount: number,
+) {
+  return db.transaction("rw", db.sessions, db.segments, async () => {
+    const segments = await db.segments
+      .where("sessionId")
+      .equals(session.id)
+      .toArray();
+    const open = segments.find((segment) => segment.endedAt === null);
+    if (open) {
+      const safeEndAt = Math.max(open.startedAt, endAt);
+      await db.segments.update(open.id, {
+        endedAt: safeEndAt,
+        durationMs: safeEndAt - open.startedAt,
+        closeReason: reason === "manual" ? "manual" : "midnight",
+      });
+      open.endedAt = safeEndAt;
+      open.durationMs = safeEndAt - open.startedAt;
+    }
+    const durationMs = sessionDuration(segments, endAt);
+    const netWordDelta = endWordCount - session.startWordCount;
+    const updated: WritingSession = {
+      ...session,
+      state: "ended",
+      endedAt: endAt,
+      endWordCount,
+      netWordDelta,
+      addedWordCount: Math.max(0, netWordDelta),
+      durationMs,
+      endedReason: reason,
+      lastHeartbeatAt: endAt,
+    };
+    await db.sessions.put(updated);
+    return updated;
+  });
+}
+
+function WritingTimerPanel({
+  work,
+  currentWordCount,
+  flush,
+  navigate,
+  autoStartSignal,
+}: {
+  work: Work;
+  currentWordCount: () => number;
+  flush: () => Promise<{
+    title: string;
+    contentJSON: JSONContent;
+    plainText: string;
+    wordCount: number;
+  }>;
+  navigate: Navigate;
+  autoStartSignal: number;
+}) {
+  const [session, setSession] = useState<WritingSession | null>(null);
+  const [segments, setSegments] = useState<SessionSegment[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [message, setMessage] = useState("");
+  const autoStartingRef = useRef(false);
+
+  const loadSession = useCallback(async () => {
+    const candidates = await db.sessions
+      .where("state")
+      .anyOf(["running", "paused"])
+      .toArray();
+    const active = candidates.sort((a, b) => b.startedAt - a.startedAt)[0];
+    if (!active) {
+      setSession(null);
+      setSegments([]);
+      return;
+    }
+    if (active.workId !== work.id) {
+      setMessage("Another work still has an unfinished session.");
+      return;
+    }
+
+    let current = active;
+    let currentSegments = await db.segments
+      .where("sessionId")
+      .equals(active.id)
+      .toArray();
+    const midnight = nextMidnight(active.startedAt);
+    if (Date.now() >= midnight) {
+      current = await finishSession(
+        active,
+        midnight,
+        "midnight-auto",
+        work.wordCount,
+      );
+      setSession(current);
+      navigate(`/write/${work.id}/settlement/${current.id}`);
+      return;
+    }
+
+    if (
+      active.state === "running" &&
+      Date.now() - active.lastHeartbeatAt > 30_000
+    ) {
+      const open = currentSegments.find((segment) => segment.endedAt === null);
+      const cutoff = Math.max(
+        open?.startedAt ?? active.startedAt,
+        active.lastHeartbeatAt,
+      );
+      if (open) {
+        await db.segments.update(open.id, {
+          endedAt: cutoff,
+          durationMs: cutoff - open.startedAt,
+          closeReason: "recovery",
+        });
+      }
+      current = { ...active, state: "paused", lastHeartbeatAt: cutoff };
+      await db.sessions.put(current);
+      currentSegments = await db.segments
+        .where("sessionId")
+        .equals(active.id)
+        .toArray();
+      setMessage("The previous session was interrupted and paused at its last heartbeat.");
+    }
+    setSession(current);
+    setSegments(currentSegments);
+  }, [navigate, work.id, work.wordCount]);
+
+  useEffect(() => {
+    const task = window.setTimeout(() => {
+      loadSession().catch(() => setMessage("The timer record could not be loaded."));
+    }, 0);
+    return () => window.clearTimeout(task);
+  }, [loadSession]);
+
+  useEffect(() => {
+    if (session?.state !== "running") return;
+    const tick = window.setInterval(async () => {
+      const time = Date.now();
+      setNow(time);
+      if (time >= nextMidnight(session.startedAt)) {
+        const latest = await flush();
+        const ended = await finishSession(
+          session,
+          nextMidnight(session.startedAt),
+          "midnight-auto",
+          latest.wordCount,
+        );
+        setSession(ended);
+        navigate(`/write/${work.id}/settlement/${ended.id}`);
+      }
+    }, 1000);
+    const heartbeat = window.setInterval(() => {
+      const time = Date.now();
+      db.sessions
+        .update(session.id, { lastHeartbeatAt: time })
+        .catch(() => undefined);
+      setSession((current) =>
+        current ? { ...current, lastHeartbeatAt: time } : current,
+      );
+    }, 15_000);
+    return () => {
+      window.clearInterval(tick);
+      window.clearInterval(heartbeat);
+    };
+  }, [flush, navigate, session, work.id]);
+
+  const start = useCallback(async () => {
+    const otherActive = (
+      await db.sessions.where("state").anyOf(["running", "paused"]).toArray()
+    ).sort((a, b) => b.startedAt - a.startedAt)[0];
+    if (otherActive) {
+      if (otherActive.workId !== work.id) {
+        setMessage("Please end the session in your other work first.");
+      }
+      return;
+    }
+    await flush();
+    const startedAt = Date.now();
+    const nextSession: WritingSession = {
+      id: crypto.randomUUID(),
+      workId: work.id,
+      state: "running",
+      startedAt,
+      endedAt: null,
+      lastHeartbeatAt: startedAt,
+      startWordCount: currentWordCount(),
+      endWordCount: null,
+      netWordDelta: null,
+      addedWordCount: null,
+      durationMs: 0,
+      mood: null,
+      note: "",
+      endedReason: null,
+    };
+    const segment: SessionSegment = {
+      id: crypto.randomUUID(),
+      sessionId: nextSession.id,
+      startedAt,
+      endedAt: null,
+      durationMs: 0,
+      closeReason: null,
+    };
+    await db.transaction("rw", db.sessions, db.segments, async () => {
+      await db.sessions.add(nextSession);
+      await db.segments.add(segment);
+    });
+    setSession(nextSession);
+    setSegments([segment]);
+    setNow(startedAt);
+    setMessage("");
+  }, [currentWordCount, flush, work.id]);
+
+  const pause = async () => {
+    if (!session || session.state !== "running") return;
+    const endedAt = Date.now();
+    const open = segments.find((segment) => segment.endedAt === null);
+    if (open) {
+      await db.segments.update(open.id, {
+        endedAt,
+        durationMs: endedAt - open.startedAt,
+        closeReason: "pause",
+      });
+    }
+    const paused = { ...session, state: "paused" as const };
+    await db.sessions.put(paused);
+    setSession(paused);
+    setSegments(
+      segments.map((segment) =>
+        segment.id === open?.id
+          ? {
+              ...segment,
+              endedAt,
+              durationMs: endedAt - segment.startedAt,
+              closeReason: "pause",
+            }
+          : segment,
+      ),
+    );
+  };
+
+  const resume = useCallback(async () => {
+    if (!session || session.state !== "paused") return;
+    const startedAt = Date.now();
+    const segment: SessionSegment = {
+      id: crypto.randomUUID(),
+      sessionId: session.id,
+      startedAt,
+      endedAt: null,
+      durationMs: 0,
+      closeReason: null,
+    };
+    const running = {
+      ...session,
+      state: "running" as const,
+      lastHeartbeatAt: startedAt,
+    };
+    await db.transaction("rw", db.sessions, db.segments, async () => {
+      await db.sessions.put(running);
+      await db.segments.add(segment);
+    });
+    setSession(running);
+    setSegments([...segments, segment]);
+    setNow(startedAt);
+  }, [segments, session]);
+
+  useEffect(() => {
+    if (autoStartSignal <= 0 || autoStartingRef.current) return;
+    const action =
+      session === null ? start : session.state === "paused" ? resume : null;
+    if (!action) return;
+    autoStartingRef.current = true;
+    const task = window.setTimeout(() => {
+      action().finally(() => {
+        autoStartingRef.current = false;
+      });
+    }, 0);
+    return () => window.clearTimeout(task);
+  }, [autoStartSignal, resume, session, start]);
+
+  const end = async () => {
+    if (!session || session.state === "ended") return;
+    const latest = await flush();
+    const ended = await finishSession(
+      session,
+      Date.now(),
+      "manual",
+      latest.wordCount,
+    );
+    setSession(ended);
+    navigate(`/write/${work.id}/settlement/${ended.id}`);
+  };
+
+  const elapsed = session ? sessionDuration(segments, now) : 0;
+
+  return (
+    <aside className="timer-panel">
+      <p className="eyebrow">writing_session</p>
+      <div className="timer-display">{formatDuration(elapsed)}</div>
+      <span className={`session-state is-${session?.state ?? "idle"}`}>
+        {session?.state === "running"
+          ? "Writing"
+          : session?.state === "paused"
+            ? "Paused"
+            : "Not started"}
+      </span>
+      {!session && (
+        <button className="button button--primary button--wide" onClick={start}>
+          Start
+        </button>
+      )}
+      {session?.state === "running" && (
+        <div className="timer-actions">
+          <button className="button button--secondary" onClick={pause}>
+            Pause
+          </button>
+          <button className="button button--quiet" onClick={end}>
+            End
+          </button>
+        </div>
+      )}
+      {session?.state === "paused" && (
+        <div className="timer-actions">
+          <button className="button button--primary" onClick={resume}>
+            Resume
+          </button>
+          <button className="button button--quiet" onClick={end}>
+            End
+          </button>
+        </div>
+      )}
+      <p className="timer-note">
+        Typing starts the timer automatically. You can also start it manually.
+        Moving the page to the background does not pause it.
+      </p>
+      {message && <p className="timer-message">{message}</p>}
+    </aside>
+  );
+}
+
+function SettlementPage({
+  workId,
+  sessionId,
+  navigate,
+}: {
+  workId: string;
+  sessionId: string;
+  navigate: Navigate;
+}) {
+  const session = useLiveQuery(() => db.sessions.get(sessionId), [sessionId]);
+  const work = useLiveQuery(() => db.works.get(workId), [workId]);
+
+  if (!session || !work) {
+    return <div className="loading-state">Preparing your session summary…</div>;
+  }
+
+  return (
+    <SettlementForm
+      key={session.id}
+      session={session}
+      work={work}
+      navigate={navigate}
+    />
+  );
+}
+
+function SettlementForm({
+  session,
+  work,
+  navigate,
+}: {
+  session: WritingSession;
+  work: Work;
+  navigate: Navigate;
+}) {
+  const [mood, setMood] = useState<SessionMood | null>(session.mood);
+  const [note, setNote] = useState(session.note);
+  const [saving, setSaving] = useState(false);
+  const playSound = useRetroSound();
+
+  useEffect(() => {
+    playSound("complete");
+  }, [playSound]);
+
+  const save = async () => {
+    setSaving(true);
+    await db.sessions.update(session.id, { mood, note });
+    navigate("/");
+  };
+
+  return (
+    <section className="settlement-page">
+      <div className="settlement-card">
+        <div className="completion-mark" aria-hidden="true">
+          ✓
+        </div>
+        <p className="eyebrow">
+          {session.endedReason === "midnight-auto"
+            ? "Saved automatically at midnight"
+            : "Writing session complete"}
+        </p>
+        <h1>{work.title}</h1>
+        <div className="settlement-stats">
+          <div>
+            <span>Writing time</span>
+            <strong>{formatDuration(session.durationMs)}</strong>
+          </div>
+          <div>
+            <span>Words added</span>
+            <strong>{session.addedWordCount ?? 0}</strong>
+          </div>
+          <div>
+            <span>Total words</span>
+            <strong>{session.endWordCount ?? work.wordCount}</strong>
+          </div>
+        </div>
+
+        <fieldset className="mood-picker">
+          <legend>How did it feel?</legend>
+          <div>
+            {[
+              { value: "smooth" as const, emoji: "🙂", label: "Flowing" },
+              { value: "normal" as const, emoji: "😐", label: "Ordinary" },
+              { value: "difficult" as const, emoji: "😣", label: "Difficult" },
+            ].map((item) => (
+              <label
+                key={item.value}
+                className={mood === item.value ? "is-selected" : ""}
+              >
+                <input
+                  type="radio"
+                  name="mood"
+                  checked={mood === item.value}
+                  onChange={() => setMood(item.value)}
+                />
+                <span>{item.emoji}</span>
+                <small>{item.label}</small>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <label className="settlement-note">
+          <span>Leave a note</span>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="A thought, a problem, or what you want to write next…"
+          />
+        </label>
+        <div className="settlement-actions">
+          <button
+            className="button button--primary"
+            onClick={save}
+            disabled={saving}
+          >
+            {saving ? "Saving…" : "Save and return home"}
+          </button>
+          <button
+            className="button button--quiet"
+            onClick={() => navigate(`/write/${work.id}`)}
+          >
+            Return to work
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MaterialsPage({ navigate }: { navigate: Navigate }) {
+  const materials = useLiveQuery(
+    () => db.materials.orderBy("updatedAt").reverse().toArray(),
+    [],
+    [],
+  );
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const [selectedId, setSelectedId] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+  const [url, setUrl] = useState("");
+  const [title, setTitle] = useState("");
+  const [note, setNote] = useState("");
+  const [tags, setTags] = useState("");
+  const [query, setQuery] = useState("");
+  const selected =
+    materials.find((material) => material.id === selectedId) ?? materials[0];
+  const visible = materials.filter((material) => {
+    const haystack = `${material.title} ${material.url} ${material.note} ${material.tags.join(" ")}`;
+    return haystack.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+  });
+
+  const addMaterial = async () => {
+    let nextUrl = url.trim();
+    if (!nextUrl) return;
+    if (!/^https?:\/\//i.test(nextUrl)) nextUrl = `https://${nextUrl}`;
+    try {
+      nextUrl = new URL(nextUrl).toString();
+    } catch {
+      return;
+    }
+    const existing = await db.materials.where("url").equals(nextUrl).first();
+    if (existing) {
+      setSelectedId(existing.id);
+      setShowAdd(false);
+      return;
+    }
+    const now = Date.now();
+    const record: Material = {
+      id: crypto.randomUUID(),
+      title: title.trim() || materialTitle(nextUrl),
+      url: nextUrl,
+      note: note.trim(),
+      tags: parseTags(tags),
+      source: "manual",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await db.materials.add(record);
+    setSelectedId(record.id);
+    setUrl("");
+    setTitle("");
+    setNote("");
+    setTags("");
+    setShowAdd(false);
+  };
+
+  const backlinks = selected
+    ? works.filter((work) => documentLinks(work.contentJSON).includes(selected.url))
+    : [];
+
+  return (
+    <section className="content-page materials-page">
+      <div className="page-heading page-heading--row">
+        <div>
+          <p className="eyebrow">bookmarks_and_fragments</p>
+          <h1>materials</h1>
+        </div>
+        <button className="button button--primary" onClick={() => setShowAdd(true)}>
+          Add a link
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="material-dialog" role="dialog" aria-label="Add material">
+          <div className="window-titlebar">
+            <span>new_material.url</span>
+            <button onClick={() => setShowAdd(false)} aria-label="Close">×</button>
+          </div>
+          <label>
+            Web address
+            <input autoFocus value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://" />
+          </label>
+          <div className="material-form-row">
+            <label>
+              Title
+              <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Optional" />
+            </label>
+            <label>
+              Tags
+              <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="research, idea" />
+            </label>
+          </div>
+          <label>
+            Note
+            <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why did you save this?" />
+          </label>
+          <button className="button button--primary" onClick={addMaterial}>Save material</button>
+        </div>
+      )}
+
+      <div className="materials-window">
+        <aside className="materials-list">
+          <div className="window-titlebar">
+            <span>library.idx</span>
+            <i>{materials.length} items</i>
+          </div>
+          <input
+            className="materials-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search materials…"
+          />
+          <div className="material-items">
+            {visible.map((material) => (
+              <button
+                key={material.id}
+                className={selected?.id === material.id ? "is-active" : ""}
+                onClick={() => setSelectedId(material.id)}
+              >
+                <span aria-hidden="true">{material.source === "reference" ? "↗" : "⌑"}</span>
+                <strong>{material.title}</strong>
+                <small>{materialTitle(material.url)}</small>
+              </button>
+            ))}
+            {!visible.length && <p>No saved links yet.</p>}
+          </div>
+        </aside>
+
+        <article className="material-detail">
+          <div className="window-titlebar">
+            <span>{selected ? "material.info" : "no_selection"}</span>
+            <i aria-hidden="true">_ □ ×</i>
+          </div>
+          {selected ? (
+            <>
+              <p className="eyebrow">{selected.source === "reference" ? "found in a work" : "saved manually"}</p>
+              <h2>{selected.title}</h2>
+              <a href={selected.url} target="_blank" rel="noreferrer">{selected.url}</a>
+              {selected.note && <p className="material-note">{selected.note}</p>}
+              {!!selected.tags.length && (
+                <div className="material-tags">
+                  {selected.tags.map((tag) => <span key={tag}>#{tag}</span>)}
+                </div>
+              )}
+              <section className="backlinks">
+                <h3>Linked from</h3>
+                {backlinks.length ? (
+                  backlinks.map((work) => (
+                    <button key={work.id} onClick={() => navigate(`/write/${work.id}`)}>
+                      <span className={`category-dot theme-${work.category}`} />
+                      <strong>{work.title}</strong>
+                      <small>{CATEGORY_META[work.category].name}</small>
+                    </button>
+                  ))
+                ) : (
+                  <p>This link has not been used in a work.</p>
+                )}
+              </section>
+              <button
+                className="delete-link"
+                onClick={async () => {
+                  await db.materials.delete(selected.id);
+                  setSelectedId("");
+                }}
+              >
+                Remove from materials
+              </button>
+            </>
+          ) : (
+            <div className="empty-detail">Select a link to see its notes and backlinks.</div>
+          )}
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function DashboardPage({ navigate }: { navigate: Navigate }) {
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const sessions = useLiveQuery(
+    () => db.sessions.filter((session) => session.state === "ended").toArray(),
+    [],
+    [],
+  );
+  const [period, setPeriod] = useState<7 | 30 | 120 | 365>(30);
+  const [selectedDate, setSelectedDate] = useState(localDateKey());
+  const workById = new Map(works.map((work) => [work.id, work]));
+  const writingDays = new Set(sessions.map((session) => localDateKey(session.startedAt)));
+  const totalDuration = sessions.reduce((sum, session) => sum + session.durationMs, 0);
+  const totalWords = works.reduce((sum, work) => sum + work.wordCount, 0);
+  const longest = Math.max(0, ...sessions.map((session) => session.durationMs));
+  let streak = 0;
+  const cursor = new Date();
+  if (!writingDays.has(localDateKey(cursor.getTime()))) cursor.setDate(cursor.getDate() - 1);
+  while (writingDays.has(localDateKey(cursor.getTime()))) {
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  const daily = Array.from({ length: period }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (period - index - 1));
+    const key = localDateKey(date.getTime());
+    const entries = sessions.filter((session) => localDateKey(session.startedAt) === key);
+    return {
+      key,
+      label: new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(date),
+      duration: entries.reduce((sum, session) => sum + session.durationMs, 0),
+      words: entries.reduce((sum, session) => sum + (session.addedWordCount ?? 0), 0),
+    };
+  });
+  const maxDaily = Math.max(1, ...daily.map((day) => day.duration));
+  const calendar = Array.from({ length: 365 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (364 - index));
+    const key = localDateKey(date.getTime());
+    const entries = sessions.filter((session) => localDateKey(session.startedAt) === key);
+    return {
+      key,
+      duration: entries.reduce((sum, session) => sum + session.durationMs, 0),
+    };
+  });
+  const maxCalendar = Math.max(1, ...calendar.map((day) => day.duration));
+  const selectedSessions = sessions.filter(
+    (session) => localDateKey(session.startedAt) === selectedDate,
+  );
+  const categoryWords = (Object.keys(CATEGORY_META) as WorkCategory[]).map((category) => ({
+    category,
+    words: works.filter((work) => work.category === category).reduce((sum, work) => sum + work.wordCount, 0),
+  }));
+  const categoryTotal = Math.max(1, categoryWords.reduce((sum, item) => sum + item.words, 0));
+  let angle = 0;
+  const donut = `conic-gradient(${categoryWords
+    .map((item) => {
+      const start = angle;
+      angle += (item.words / categoryTotal) * 360;
+      const colors: Record<WorkCategory, string> = {
+        "social-insight": "#8290aa",
+        "life-essay": "#d5b37b",
+        review: "#6f6878",
+        "fan-fiction": "#c99db8",
+      };
+      return `${colors[item.category]} ${start}deg ${angle}deg`;
+    })
+    .join(",")})`;
+  const moodCounts = {
+    smooth: sessions.filter((session) => session.mood === "smooth").length,
+    normal: sessions.filter((session) => session.mood === "normal").length,
+    difficult: sessions.filter((session) => session.mood === "difficult").length,
+  };
+  const moodTotal = Math.max(1, moodCounts.smooth + moodCounts.normal + moodCounts.difficult);
+  const timeBands = [
+    { label: "00–06", start: 0, end: 6 },
+    { label: "06–12", start: 6, end: 12 },
+    { label: "12–18", start: 12, end: 18 },
+    { label: "18–24", start: 18, end: 24 },
+  ].map((band) => ({
+    ...band,
+    value: sessions
+      .filter((session) => {
+        const hour = new Date(session.startedAt).getHours();
+        return hour >= band.start && hour < band.end;
+      })
+      .reduce((sum, session) => sum + session.durationMs, 0),
+  }));
+  const maxBand = Math.max(1, ...timeBands.map((band) => band.value));
+  const workRanking = works
+    .map((work) => ({
+      work,
+      duration: sessions
+        .filter((session) => session.workId === work.id)
+        .reduce((sum, session) => sum + session.durationMs, 0),
+    }))
+    .sort((a, b) => b.duration - a.duration)
+    .slice(0, 5);
+  const maxWorkDuration = Math.max(1, ...workRanking.map((item) => item.duration));
+
+  return (
+    <section className="content-page dashboard-page">
+      <div className="page-heading">
+        <p className="eyebrow">writer_history.dat</p>
+        <h1>overview</h1>
+      </div>
+      <div className="metric-grid">
+        {[
+          ["Writing time", formatHours(totalDuration)],
+          ["Total words", totalWords.toLocaleString()],
+          ["Works", works.length.toString()],
+          ["Current streak", `${streak} days`],
+          ["Longest session", formatDuration(longest)],
+        ].map(([label, value], index) => (
+          <article key={label}>
+            <span>0{index + 1}</span>
+            <small>{label}</small>
+            <strong>{value}</strong>
+          </article>
+        ))}
+      </div>
+
+      <section className="dashboard-window contribution-window">
+        <div className="window-titlebar">
+          <span>365_days.map</span>
+          <i>writing / rest</i>
+        </div>
+        <div className="contribution-grid" aria-label="One year writing calendar">
+          {calendar.map((day) => {
+            const level = day.duration === 0 ? 0 : Math.max(1, Math.ceil((day.duration / maxCalendar) * 4));
+            return (
+              <button
+                key={day.key}
+                className={`level-${level}${selectedDate === day.key ? " is-selected" : ""}`}
+                title={`${day.key}: ${Math.round(day.duration / 60000)} min`}
+                onClick={() => setSelectedDate(day.key)}
+              />
+            );
+          })}
+        </div>
+        <div className="calendar-detail">
+          <div>
+            <span>{selectedDate}</span>
+            <strong>{selectedSessions.length ? `${Math.round(selectedSessions.reduce((sum, session) => sum + session.durationMs, 0) / 60000)} min written` : "Rest day"}</strong>
+          </div>
+          <div className="day-session-list">
+            {selectedSessions.map((session) => (
+              <button key={session.id} onClick={() => navigate(`/write/${session.workId}`)}>
+                <strong>{workById.get(session.workId)?.title ?? "Deleted work"}</strong>
+                <span>{formatDuration(session.durationMs)} · +{session.addedWordCount ?? 0} words · {moodLabel(session.mood)}</span>
+                {session.note && <small>{session.note}</small>}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="dashboard-window trend-window">
+        <div className="window-titlebar">
+          <span>writing_frequency.chart</span>
+          <div className="period-tabs">
+            {([7, 30, 120, 365] as const).map((days) => (
+              <button key={days} className={period === days ? "is-active" : ""} onClick={() => setPeriod(days)}>
+                {days === 365 ? "1 year" : `${days}d`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="trend-chart">
+          {daily.map((day, index) => (
+            <div key={day.key} title={`${day.label}: ${Math.round(day.duration / 60000)} min, +${day.words} words`}>
+              <i style={{ height: `${Math.max(day.duration ? 4 : 1, (day.duration / maxDaily) * 100)}%` }} />
+              {(period <= 30 || index % Math.ceil(period / 12) === 0) && <small>{day.label}</small>}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="dashboard-split">
+        <section className="dashboard-window">
+          <div className="window-titlebar"><span>writing_types.pie</span><i>words</i></div>
+          <div className="genre-chart">
+            <div className="genre-donut" style={{ background: donut }}><span>{totalWords}<small>words</small></span></div>
+            <div className="genre-legend">
+              {categoryWords.map((item) => (
+                <div key={item.category} className={`theme-${item.category}`}>
+                  <i /><span>{CATEGORY_META[item.category].name}</span><strong>{Math.round((item.words / categoryTotal) * 100)}%</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+        <section className="dashboard-window">
+          <div className="window-titlebar"><span>session_mood.stats</span><i>{sessions.length} sessions</i></div>
+          <div className="mood-bars">
+            {[
+              ["🙂 Flowing", moodCounts.smooth],
+              ["😐 Ordinary", moodCounts.normal],
+              ["😣 Difficult", moodCounts.difficult],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <i><b style={{ width: `${(Number(value) / moodTotal) * 100}%` }} /></i>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="dashboard-split">
+        <section className="dashboard-window">
+          <div className="window-titlebar"><span>time_of_day.hist</span><i>writing time</i></div>
+          <div className="time-bands">
+            {timeBands.map((band) => (
+              <div key={band.label}><i style={{ height: `${Math.max(2, (band.value / maxBand) * 100)}%` }} /><span>{band.label}</span></div>
+            ))}
+          </div>
+        </section>
+        <section className="dashboard-window">
+          <div className="window-titlebar"><span>works_rank.list</span><i>focus</i></div>
+          <div className="work-ranking">
+            {workRanking.map((item, index) => (
+              <button key={item.work.id} onClick={() => navigate(`/write/${item.work.id}`)}>
+                <span>0{index + 1}</span>
+                <strong>{item.work.title}</strong>
+                <i><b style={{ width: `${(item.duration / maxWorkDuration) * 100}%` }} /></i>
+                <small>{formatHours(item.duration)}</small>
+              </button>
+            ))}
+            {!workRanking.length && <p>No writing data yet.</p>}
+          </div>
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function formatHours(durationMs: number) {
+  const minutes = Math.round(durationMs / 60000);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function moodLabel(mood: SessionMood | null) {
+  if (mood === "smooth") return "Flowing";
+  if (mood === "normal") return "Ordinary";
+  if (mood === "difficult") return "Difficult";
+  return "No mood";
+}
+
+function ComingSoon({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+}) {
+  return (
+    <section className="coming-soon">
+      <span aria-hidden="true">○</span>
+      <p className="eyebrow">{eyebrow}</p>
+      <h1>{title}</h1>
+      <p>{description}</p>
+    </section>
+  );
+}
+
+function QuietFooter() {
+  return (
+    <footer className="quiet-footer">
+      <span>Everything stays on this device by default.</span>
+      <span>Personal Writer OS · local-first</span>
+    </footer>
+  );
+}
