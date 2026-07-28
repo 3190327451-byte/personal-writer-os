@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -270,7 +271,9 @@ export default function WriterApp() {
         {route.name === "dashboard" && <DashboardPage navigate={navigate} />}
         {route.name === "materials" && <MaterialsPage navigate={navigate} />}
       </main>
-      {!isEditor && <QuietFooter />}
+      {!isEditor && route.name !== "settlement" && (
+        <WritingReminder navigate={navigate} />
+      )}
     </div>
   );
 }
@@ -337,7 +340,12 @@ function DataMenu() {
     () => db.settings.get("retro-sound"),
     [],
   );
+  const reminderSetting = useLiveQuery(
+    () => db.settings.get("in-app-reminders"),
+    [],
+  );
   const soundEnabled = soundSetting?.value === true;
+  const remindersEnabled = reminderSetting?.value !== false;
 
   const handleExport = async () => {
     const backup = await exportBackup();
@@ -405,9 +413,113 @@ function DataMenu() {
           <span>Retro system sounds</span>
           <small>{soundEnabled ? "ON" : "OFF"}</small>
         </label>
+        <label className="sound-toggle">
+          <input
+            type="checkbox"
+            checked={remindersEnabled}
+            onChange={async (event) => {
+              const enabled = event.target.checked;
+              await db.settings.put({
+                key: "in-app-reminders",
+                value: enabled,
+                updatedAt: Date.now(),
+              });
+              setMessage(enabled ? "In-app reminders on" : "In-app reminders off");
+            }}
+          />
+          <span>In-app reminders</span>
+          <small>{remindersEnabled ? "ON" : "OFF"}</small>
+        </label>
         {message && <small role="status">{message}</small>}
       </div>
     </DismissibleDetails>
+  );
+}
+
+function WritingReminder({ navigate }: { navigate: Navigate }) {
+  const works = useLiveQuery(
+    () => db.works.filter((work) => work.deletedAt === null).toArray(),
+    [],
+    [],
+  );
+  const sessions = useLiveQuery(() => db.sessions.toArray(), [], []);
+  const reminderSetting = useLiveQuery(
+    () => db.settings.get("in-app-reminders"),
+    [],
+  );
+  const dismissedSetting = useLiveQuery(
+    () => db.settings.get("reminder-dismissed-date"),
+    [],
+  );
+  const [clock, setClock] = useState(() => Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const now = new Date(clock);
+  const today = localDateKey(clock);
+  const weekend = now.getDay() === 0 || now.getDay() === 6;
+  const reminderHour = weekend ? 11 : 9;
+  const alreadyWrote = sessions.some(
+    (session) => localDateKey(session.startedAt) === today,
+  );
+  const dismissedToday = dismissedSetting?.value === today;
+  const visible =
+    reminderSetting?.value !== false &&
+    now.getHours() >= reminderHour &&
+    !alreadyWrote &&
+    !dismissedToday;
+
+  if (!visible) return null;
+
+  const dismiss = async () => {
+    const today = localDateKey();
+    await db.settings.put({
+      key: "reminder-dismissed-date",
+      value: today,
+      updatedAt: Date.now(),
+    });
+  };
+
+  const openWriting = async () => {
+    const active = sessions
+      .filter((session) => session.state !== "ended")
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    const recent = [...works].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    await dismiss();
+    navigate(active ? `/write/${active.workId}` : recent ? `/write/${recent.id}` : "/write/new");
+  };
+
+  return (
+    <div className="system-dialog-layer">
+      <section
+        className="reminder-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reminder-title"
+      >
+        <div className="dialog-titlebar">
+          <span>reminder.msg</span>
+          <button onClick={dismiss} aria-label="Close reminder">×</button>
+        </div>
+        <div className="reminder-body">
+          <span className="reminder-icon" aria-hidden="true">✎</span>
+          <div>
+            <h2 id="reminder-title">Your writing desk is still closed today.</h2>
+            <div className="dialog-actions">
+              <button className="button button--primary" onClick={openWriting}>
+                Open a work
+              </button>
+              <button className="button button--secondary" onClick={dismiss}>
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -677,7 +789,7 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
         {CATEGORY_META[work.category].name}
       </span>
       <strong>{work.title || "Untitled work"}</strong>
-      <p>{work.plainText.slice(0, 72) || "A blank page, ready when you are."}</p>
+      <p>{work.plainText.slice(0, 72) || "Empty document"}</p>
       {!!work.tags?.length && (
         <span className="work-card-tags">
           {work.tags.slice(0, 3).map((item) => `#${item}`).join("  ")}
@@ -695,7 +807,6 @@ function EmptyWorks({ navigate }: { navigate: Navigate }) {
     <div className="empty-works">
       <span aria-hidden="true">✦</span>
       <h3>No works yet</h3>
-      <p>Begin with a document that can grow with you.</p>
       <button
         className="button button--secondary"
         onClick={() => navigate("/write/new")}
@@ -877,6 +988,8 @@ function WritingWorkspace({
   const [typingSignal, setTypingSignal] = useState(0);
   const [tags, setTags] = useState(initialWork.tags ?? []);
   const [tagDraft, setTagDraft] = useState("");
+  const [settlementSession, setSettlementSession] =
+    useState<WritingSession | null>(null);
   const latestRef = useRef({
     title: initialWork.title,
     contentJSON: initialWork.contentJSON,
@@ -905,7 +1018,7 @@ function WritingWorkspace({
       }),
       Highlight.configure({ multicolor: true }),
       Placeholder.configure({
-        placeholder: "Start here. One sentence is enough.",
+        placeholder: "Start writing…",
       }),
     ],
     content: initialWork.contentJSON,
@@ -1169,10 +1282,20 @@ function WritingWorkspace({
           work={initialWork}
           currentWordCount={getCurrentWordCount}
           flush={flush}
-          navigate={navigate}
           autoStartSignal={typingSignal}
+          onSessionEnd={setSettlementSession}
         />
       </div>
+      {settlementSession && (
+        <div className="settlement-overlay">
+          <SettlementForm
+            session={settlementSession}
+            work={{ ...initialWork, title, wordCount }}
+            navigate={navigate}
+            onReturn={() => setSettlementSession(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1399,8 +1522,8 @@ function WritingTimerPanel({
   work,
   currentWordCount,
   flush,
-  navigate,
   autoStartSignal,
+  onSessionEnd,
 }: {
   work: Work;
   currentWordCount: () => number;
@@ -1410,14 +1533,112 @@ function WritingTimerPanel({
     plainText: string;
     wordCount: number;
   }>;
-  navigate: Navigate;
   autoStartSignal: number;
+  onSessionEnd: (session: WritingSession) => void;
 }) {
   const [session, setSession] = useState<WritingSession | null>(null);
   const [segments, setSegments] = useState<SessionSegment[]>([]);
   const [now, setNow] = useState(() => Date.now());
   const [message, setMessage] = useState("");
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  const [minimized, setMinimized] = useState(false);
   const autoStartingRef = useRef(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const positionRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    db.settings.get("timer-position").then((setting) => {
+      if (!active || !setting?.value || typeof setting.value !== "object") return;
+      const saved = setting.value as { x?: unknown; y?: unknown };
+      if (typeof saved.x === "number" && typeof saved.y === "number") {
+        const nextPosition = {
+          x: Math.max(8, Math.min(saved.x, window.innerWidth - 250)),
+          y: Math.max(8, Math.min(saved.y, window.innerHeight - 70)),
+        };
+        positionRef.current = nextPosition;
+        setPosition(nextPosition);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const keepInView = () => {
+      setPosition((current) => {
+        if (!current) return current;
+        const nextPosition = {
+          x: Math.max(8, Math.min(current.x, window.innerWidth - 250)),
+          y: Math.max(8, Math.min(current.y, window.innerHeight - 70)),
+        };
+        positionRef.current = nextPosition;
+        return nextPosition;
+      });
+    };
+    window.addEventListener("resize", keepInView);
+    return () => window.removeEventListener("resize", keepInView);
+  }, []);
+
+  const beginDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: rect.left,
+      originY: rect.top,
+    };
+  };
+
+  const dragTimer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const width = panelRef.current?.offsetWidth ?? 250;
+    const height = panelRef.current?.offsetHeight ?? 70;
+    const nextPosition = {
+      x: Math.max(
+        8,
+        Math.min(
+          drag.originX + event.clientX - drag.startX,
+          window.innerWidth - width - 8,
+        ),
+      ),
+      y: Math.max(
+        8,
+        Math.min(
+          drag.originY + event.clientY - drag.startY,
+          window.innerHeight - height - 8,
+        ),
+      ),
+    };
+    positionRef.current = nextPosition;
+    setPosition(nextPosition);
+  };
+
+  const finishDrag = async (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const finalPosition = positionRef.current;
+    if (!finalPosition) return;
+    await db.settings.put({
+      key: "timer-position",
+      value: finalPosition,
+      updatedAt: Date.now(),
+    });
+  };
 
   const loadSession = useCallback(async () => {
     const candidates = await db.sessions
@@ -1448,8 +1669,9 @@ function WritingTimerPanel({
         "midnight-auto",
         work.wordCount,
       );
-      setSession(current);
-      navigate(`/write/${work.id}/settlement/${current.id}`);
+      onSessionEnd(current);
+      setSession(null);
+      setSegments([]);
       return;
     }
 
@@ -1479,7 +1701,7 @@ function WritingTimerPanel({
     }
     setSession(current);
     setSegments(currentSegments);
-  }, [navigate, work.id, work.wordCount]);
+  }, [onSessionEnd, work.id, work.wordCount]);
 
   useEffect(() => {
     const task = window.setTimeout(() => {
@@ -1501,8 +1723,9 @@ function WritingTimerPanel({
           "midnight-auto",
           latest.wordCount,
         );
-        setSession(ended);
-        navigate(`/write/${work.id}/settlement/${ended.id}`);
+        onSessionEnd(ended);
+        setSession(null);
+        setSegments([]);
       }
     }, 1000);
     const heartbeat = window.setInterval(() => {
@@ -1518,7 +1741,7 @@ function WritingTimerPanel({
       window.clearInterval(tick);
       window.clearInterval(heartbeat);
     };
-  }, [flush, navigate, session, work.id]);
+  }, [flush, onSessionEnd, session]);
 
   const start = useCallback(async () => {
     const otherActive = (
@@ -1642,53 +1865,77 @@ function WritingTimerPanel({
       "manual",
       latest.wordCount,
     );
-    setSession(ended);
-    navigate(`/write/${work.id}/settlement/${ended.id}`);
+    onSessionEnd(ended);
+    setSession(null);
+    setSegments([]);
   };
 
   const elapsed = session ? sessionDuration(segments, now) : 0;
 
   return (
-    <aside className="timer-panel">
-      <p className="eyebrow">writing_session</p>
-      <div className="timer-display">{formatDuration(elapsed)}</div>
-      <span className={`session-state is-${session?.state ?? "idle"}`}>
-        {session?.state === "running"
-          ? "Writing"
-          : session?.state === "paused"
-            ? "Paused"
-            : "Not started"}
-      </span>
-      {!session && (
-        <button className="button button--primary button--wide" onClick={start}>
-          Start
+    <aside
+      ref={panelRef}
+      className={minimized ? "timer-panel is-minimized" : "timer-panel"}
+      style={
+        position
+          ? { left: position.x, top: position.y, right: "auto" }
+          : undefined
+      }
+    >
+      <div
+        className="timer-window-titlebar"
+        onPointerDown={beginDrag}
+        onPointerMove={dragTimer}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
+      >
+        <span>timer.app</span>
+        <button
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setMinimized((value) => !value)}
+          aria-label={minimized ? "Restore timer" : "Minimize timer"}
+        >
+          {minimized ? "□" : "_"}
         </button>
-      )}
-      {session?.state === "running" && (
-        <div className="timer-actions">
-          <button className="button button--secondary" onClick={pause}>
-            Pause
+      </div>
+      <div className="timer-mini-row">
+        <div className="timer-display">{formatDuration(elapsed)}</div>
+        <span className={`session-state is-${session?.state ?? "idle"}`}>
+          {session?.state === "running"
+            ? "Writing"
+            : session?.state === "paused"
+              ? "Paused"
+              : "Ready"}
+        </span>
+      </div>
+      <div className="timer-content">
+        {!session && (
+          <button className="button button--primary button--wide" onClick={start}>
+            Start
           </button>
-          <button className="button button--quiet" onClick={end}>
-            End
-          </button>
-        </div>
-      )}
-      {session?.state === "paused" && (
-        <div className="timer-actions">
-          <button className="button button--primary" onClick={resume}>
-            Resume
-          </button>
-          <button className="button button--quiet" onClick={end}>
-            End
-          </button>
-        </div>
-      )}
-      <p className="timer-note">
-        Typing starts the timer automatically. You can also start it manually.
-        Moving the page to the background does not pause it.
-      </p>
-      {message && <p className="timer-message">{message}</p>}
+        )}
+        {session?.state === "running" && (
+          <div className="timer-actions">
+            <button className="button button--secondary" onClick={pause}>
+              Pause
+            </button>
+            <button className="button button--quiet" onClick={end}>
+              End
+            </button>
+          </div>
+        )}
+        {session?.state === "paused" && (
+          <div className="timer-actions">
+            <button className="button button--primary" onClick={resume}>
+              Resume
+            </button>
+            <button className="button button--quiet" onClick={end}>
+              End
+            </button>
+          </div>
+        )}
+        {message && <p className="timer-message">{message}</p>}
+      </div>
     </aside>
   );
 }
@@ -1723,10 +1970,12 @@ function SettlementForm({
   session,
   work,
   navigate,
+  onReturn,
 }: {
   session: WritingSession;
   work: Work;
   navigate: Navigate;
+  onReturn?: () => void;
 }) {
   const [mood, setMood] = useState<SessionMood | null>(session.mood);
   const [note, setNote] = useState(session.note);
@@ -1746,6 +1995,17 @@ function SettlementForm({
   return (
     <section className="settlement-page">
       <div className="settlement-card">
+        <div className="dialog-titlebar settlement-titlebar">
+          <span>session_summary.txt</span>
+          <button
+            onClick={() =>
+              onReturn ? onReturn() : navigate(`/write/${work.id}`)
+            }
+            aria-label="Close session summary"
+          >
+            ×
+          </button>
+        </div>
         <div className="completion-mark" aria-hidden="true">
           ✓
         </div>
@@ -1813,7 +2073,9 @@ function SettlementForm({
           </button>
           <button
             className="button button--quiet"
-            onClick={() => navigate(`/write/${work.id}`)}
+            onClick={() =>
+              onReturn ? onReturn() : navigate(`/write/${work.id}`)
+            }
           >
             Return to work
           </button>
@@ -2275,14 +2537,5 @@ function ComingSoon({
       <h1>{title}</h1>
       <p>{description}</p>
     </section>
-  );
-}
-
-function QuietFooter() {
-  return (
-    <footer className="quiet-footer">
-      <span>Everything stays on this device by default.</span>
-      <span>Personal Writer OS · local-first</span>
-    </footer>
   );
 }

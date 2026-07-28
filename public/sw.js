@@ -1,5 +1,14 @@
-const CACHE_NAME = "personal-writer-os-v2";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
+const CACHE_NAME = "personal-writer-os-v3";
+const APP_SHELL = [
+  "/",
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/cursors/fountain-pen.png",
+  "/cursors/pencil.png",
+  "/cursors/dip-pen.png",
+  "/cursors/quill.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

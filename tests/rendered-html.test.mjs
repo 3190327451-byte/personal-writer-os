@@ -51,18 +51,23 @@ test("ships the local-first application and PWA assets", async () => {
 
   assert.match(app, /personal-writer-os/);
   assert.match(app, /Autosaves every 5 seconds/);
-  assert.match(app, /Typing starts the timer automatically/);
   assert.match(app, /Writing session complete/);
-  assert.match(app, /Moving the page to the background does not pause it/);
+  assert.match(app, /timer-window-titlebar/);
+  assert.match(app, /function WritingReminder/);
+  assert.match(app, /settlement-overlay/);
   assert.match(app, /function MaterialsPage/);
   assert.match(app, /function DashboardPage/);
   assert.match(app, /parseTags/);
   assert.match(layout, /Personal Writer OS/);
   assert.match(layout, /manifest\.webmanifest/);
   assert.equal(JSON.parse(manifest).display, "standalone");
-  assert.match(serviceWorker, /personal-writer-os-v2/);
+  assert.match(serviceWorker, /personal-writer-os-v3/);
   await Promise.all([
     access(new URL("../public/icon-192.png", import.meta.url)),
     access(new URL("../public/icon-512.png", import.meta.url)),
+    access(new URL("../public/cursors/fountain-pen.png", import.meta.url)),
+    access(new URL("../public/cursors/pencil.png", import.meta.url)),
+    access(new URL("../public/cursors/dip-pen.png", import.meta.url)),
+    access(new URL("../public/cursors/quill.png", import.meta.url)),
   ]);
 });
