@@ -1,0 +1,348 @@
+/* Approved desktop visual lock. Loaded after the legacy stylesheet. */
+html,
+body,
+.app-shell {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body,
+.app-shell,
+.header,
+.brand,
+.top-nav,
+.nav-link,
+.button,
+.back-button,
+.text-button,
+.data-menu,
+.data-popover,
+.page-heading,
+.welcome-block,
+.today-card,
+.recent-section,
+.work-card,
+.category-tab,
+.category-option,
+.editor-topline,
+.editor-toolbar,
+.timer-panel,
+.settlement-card,
+.reminder-dialog,
+.materials-window,
+.dashboard-window {
+  font-family: Tahoma, Verdana, Arial, "Microsoft YaHei", sans-serif;
+}
+
+.main {
+  width: min(1540px, calc(100% - 40px));
+  max-width: none;
+  margin-inline: auto;
+}
+
+.main--editor {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 12px clamp(16px, 2vw, 30px) 36px;
+}
+
+.header,
+.header--compact {
+  width: 100%;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.13) 0 2px, transparent 2px 4px), linear-gradient(#f8d9ed 0 12%, #efb8d9 12% 88%, #c992bd 88%);
+}
+
+.brand,
+.brand strong,
+.brand small,
+.nav-link,
+.data-menu > summary {
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-style: normal;
+}
+
+.welcome-block,
+.today-card,
+.recent-section,
+.empty-works,
+.category-groups,
+.new-work-panel,
+.work-card,
+.category-tab,
+.category-option,
+.material-dialog,
+.materials-window,
+.dashboard-window,
+.metric-grid article,
+.paper,
+.timer-panel,
+.settlement-card,
+.reminder-dialog {
+  border-radius: 1px;
+}
+
+.welcome-block h1,
+.welcome-block h1 span,
+.welcome-block h1 small,
+.page-heading h1,
+.material-detail h2,
+.settlement-card h1 {
+  font-family: Tahoma, Verdana, Arial, "Microsoft YaHei", sans-serif;
+  font-style: normal;
+}
+
+.welcome-block h1 span {
+  font-size: clamp(35px, 5.2vw, 64px);
+  font-weight: 700;
+  letter-spacing: -.055em;
+}
+
+.welcome-block h1 small {
+  margin-top: 13px;
+  font-size: clamp(14px, 1.5vw, 17px);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.page-heading h1 {
+  font-size: clamp(30px, 3.3vw, 40px);
+  font-weight: 700;
+  letter-spacing: -.045em;
+}
+
+.empty-works {
+  min-height: 148px;
+  border-radius: 1px;
+  background: rgba(255,244,251,.68);
+  box-shadow: inset -1px -1px rgba(75,49,95,.3);
+}
+
+.work-card,
+.category-tab,
+.category-option {
+  border-width: 2px;
+  border-radius: 1px;
+  background: var(--theme-paper);
+  box-shadow: 3px 3px 0 rgba(58,34,72,.55), inset -1px -1px color-mix(in srgb, var(--theme-border), transparent 35%);
+}
+
+.work-card strong,
+.category-tab strong,
+.category-option strong,
+.work-card.theme-fan-fiction strong {
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+  font-style: normal;
+}
+
+.work-card::after,
+.category-tab::after,
+.category-option::after {
+  width: 54px;
+  height: 54px;
+  background: var(--tool-icon) center / contain no-repeat;
+  content: "";
+  image-rendering: pixelated;
+}
+
+.writing-workspace,
+.editor-layout {
+  width: 100%;
+  max-width: 100%;
+  overflow: visible;
+}
+
+.editor-layout {
+  display: block;
+}
+
+.paper {
+  width: 100%;
+  max-width: none;
+  min-height: calc(100vh - 142px);
+  margin: 0;
+  padding: 82px clamp(28px, 5.5vw, 90px) 44px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: var(--theme-paper);
+  box-shadow: 7px 8px 0 color-mix(in srgb, var(--theme-border), transparent 25%);
+}
+
+.paper::before {
+  top: 6px;
+  right: 6px;
+  left: 6px;
+  height: 29px;
+  padding: 6px 10px;
+  border: 1px solid var(--theme-border);
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.14) 0 2px, transparent 2px 4px), var(--theme-accent);
+  color: white;
+  font: 700 12px Tahoma, Verdana, Arial, sans-serif;
+}
+
+.document-title {
+  font-family: var(--theme-title-font);
+  font-size: clamp(24px, 2.35vw, 34px);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.ProseMirror,
+.prose-editor {
+  width: min(100%, 1100px);
+  max-width: 1100px;
+  min-height: 58vh;
+  margin: 22px auto 0;
+  padding: 0 clamp(0px, 1vw, 12px);
+  color: #2d2730;
+  font-family: var(--theme-body-font);
+  font-size: 17px;
+  font-style: normal;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ProseMirror ul,
+.ProseMirror ol,
+.prose-editor ul,
+.prose-editor ol {
+  display: block;
+  margin: .65em 0 1em;
+  padding-left: 2em;
+}
+
+.ProseMirror li,
+.prose-editor li {
+  display: list-item;
+  margin: .2em 0;
+}
+
+.paper-footer {
+  right: 7px;
+  bottom: 7px;
+  left: 7px;
+  min-height: 25px;
+  border-radius: 0;
+  font: 11px Tahoma, Verdana, Arial, sans-serif;
+}
+
+.timer-panel,
+.timer-panel.is-minimized {
+  position: fixed;
+  z-index: 900;
+  top: 78px;
+  right: 24px;
+  bottom: auto;
+  left: auto;
+  display: block;
+  max-width: calc(100vw - 16px);
+  border-radius: 1px;
+  transition: none;
+  will-change: transform;
+}
+
+.timer-panel {
+  width: 245px;
+  padding: 34px 10px 10px;
+  animation: none;
+}
+
+.writing-workspace .timer-panel {
+  animation: none !important;
+}
+
+.timer-panel.is-minimized {
+  width: 210px;
+  height: 68px;
+}
+
+.timer-panel::before {
+  display: none;
+}
+
+.timer-window-titlebar {
+  cursor: grab;
+  touch-action: none;
+}
+
+.timer-panel.is-dragging .timer-window-titlebar {
+  cursor: grabbing;
+}
+
+.system-dialog-layer,
+.settlement-overlay {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  width: 100%;
+  max-width: 100%;
+  place-items: center;
+  overflow: auto;
+  background: rgba(57,34,67,.28);
+  backdrop-filter: none;
+}
+
+.settlement-page {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  background: transparent;
+}
+
+.settlement-card,
+.reminder-dialog {
+  border-width: 2px;
+  border-radius: 1px;
+  box-shadow: 8px 9px 0 rgba(48,32,62,.72);
+}
+
+.materials-window {
+  grid-template-columns: minmax(260px, 350px) minmax(0, 1fr);
+}
+
+.material-detail,
+.materials-list {
+  min-width: 0;
+}
+
+.material-detail > a {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.writing-workspace.theme-social-insight .paper {
+  background: linear-gradient(rgba(50,118,207,.055) 1px, transparent 1px) 0 0 / 100% 34px, #edf9ff;
+}
+
+.writing-workspace.theme-life-essay .paper {
+  background: linear-gradient(90deg, transparent 54px, rgba(209,112,102,.18) 55px 56px, transparent 57px), repeating-linear-gradient(0deg, transparent 0 31px, rgba(117,91,55,.12) 31px 32px), #fff2bd;
+}
+
+.writing-workspace.theme-review .paper {
+  background: linear-gradient(90deg, #3d2a43 0 16px, transparent 16px calc(100% - 16px), #3d2a43 calc(100% - 16px)), repeating-linear-gradient(0deg, transparent 0 48px, rgba(87,52,72,.07) 48px 49px), #faf4ea;
+}
+
+.writing-workspace.theme-fan-fiction .paper {
+  background: radial-gradient(circle at 95% 13%, rgba(217,60,145,.18) 0 2px, transparent 3px), radial-gradient(circle at 92% 17%, rgba(78,193,211,.22) 0 2px, transparent 3px), radial-gradient(circle at 8% 82%, rgba(188,111,204,.13) 0 2px, transparent 3px), #fff2fc;
+}
+
+@media (max-width: 1180px) {
+  .main { width: calc(100% - 28px); }
+  .work-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .category-switcher { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 880px) {
+  .home-page,
+  .materials-window,
+  .dashboard-split { grid-template-columns: 1fr; }
+  .recent-section { grid-column: 1; }
+  .timer-panel,
+  .timer-panel.is-minimized { position: fixed; top: 12px; right: 12px; }
+}

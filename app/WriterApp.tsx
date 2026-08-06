@@ -430,6 +430,14 @@ function DataMenu() {
           <span>In-app reminders</span>
           <small>{remindersEnabled ? "ON" : "OFF"}</small>
         </label>
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent("preview-writing-reminder"))
+          }
+        >
+          Preview reminder
+        </button>
         {message && <small role="status">{message}</small>}
       </div>
     </DismissibleDetails>
@@ -452,10 +460,16 @@ function WritingReminder({ navigate }: { navigate: Navigate }) {
     [],
   );
   const [clock, setClock] = useState(() => Date.now());
+  const [previewVisible, setPreviewVisible] = useState(false);
 
   useEffect(() => {
     const interval = window.setInterval(() => setClock(Date.now()), 60_000);
-    return () => window.clearInterval(interval);
+    const preview = () => setPreviewVisible(true);
+    window.addEventListener("preview-writing-reminder", preview);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("preview-writing-reminder", preview);
+    };
   }, []);
 
   const now = new Date(clock);
@@ -467,14 +481,19 @@ function WritingReminder({ navigate }: { navigate: Navigate }) {
   );
   const dismissedToday = dismissedSetting?.value === today;
   const visible =
-    reminderSetting?.value !== false &&
-    now.getHours() >= reminderHour &&
-    !alreadyWrote &&
-    !dismissedToday;
+    previewVisible ||
+    (reminderSetting?.value !== false &&
+      now.getHours() >= reminderHour &&
+      !alreadyWrote &&
+      !dismissedToday);
 
   if (!visible) return null;
 
   const dismiss = async () => {
+    if (previewVisible) {
+      setPreviewVisible(false);
+      return;
+    }
     const today = localDateKey();
     await db.settings.put({
       key: "reminder-dismissed-date",
@@ -507,10 +526,10 @@ function WritingReminder({ navigate }: { navigate: Navigate }) {
         <div className="reminder-body">
           <span className="reminder-icon" aria-hidden="true">✎</span>
           <div>
-            <h2 id="reminder-title">Your writing desk is still closed today.</h2>
+            <h2 id="reminder-title">Your writing desk has not been opened today.</h2>
             <div className="dialog-actions">
               <button className="button button--primary" onClick={openWriting}>
-                Open a work
+                Open writing desk
               </button>
               <button className="button button--secondary" onClick={dismiss}>
                 Not now
@@ -999,8 +1018,18 @@ function WritingWorkspace({
   const dirtyRef = useRef(recovered);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedSnapshotRef = useRef(false);
+  const autoStartWordCountRef = useRef(initialWork.wordCount);
+  const autoStartArmedRef = useRef(true);
   const noteTyping = useCallback(() => {
+    if (autoStartArmedRef.current) {
+      autoStartWordCountRef.current = latestRef.current.wordCount;
+      autoStartArmedRef.current = false;
+    }
     setTypingSignal((signal) => signal + 1);
+  }, []);
+  const handleSessionEnd = useCallback((session: WritingSession) => {
+    autoStartArmedRef.current = true;
+    setSettlementSession(session);
   }, []);
 
   const editor = useEditor({
@@ -1275,7 +1304,7 @@ function WritingWorkspace({
           <EditorContent editor={editor} />
           <div className="paper-footer">
             <span>{wordCount} words</span>
-            <span>Autosaves every 5 seconds</span>
+            <span>{saveStatus === "saved" ? "Saved locally" : "Saving…"}</span>
           </div>
         </article>
         <WritingTimerPanel
@@ -1283,7 +1312,8 @@ function WritingWorkspace({
           currentWordCount={getCurrentWordCount}
           flush={flush}
           autoStartSignal={typingSignal}
-          onSessionEnd={setSettlementSession}
+          autoStartWordCount={autoStartWordCountRef.current}
+          onSessionEnd={handleSessionEnd}
         />
       </div>
       {settlementSession && (
@@ -1523,6 +1553,7 @@ function WritingTimerPanel({
   currentWordCount,
   flush,
   autoStartSignal,
+  autoStartWordCount,
   onSessionEnd,
 }: {
   work: Work;
@@ -1534,6 +1565,7 @@ function WritingTimerPanel({
     wordCount: number;
   }>;
   autoStartSignal: number;
+  autoStartWordCount: number;
   onSessionEnd: (session: WritingSession) => void;
 }) {
   const [session, setSession] = useState<WritingSession | null>(null);
@@ -1545,6 +1577,7 @@ function WritingTimerPanel({
   );
   const [minimized, setMinimized] = useState(false);
   const autoStartingRef = useRef(false);
+  const handledAutoStartSignalRef = useRef(0);
   const panelRef = useRef<HTMLElement>(null);
   const positionRef = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{
@@ -1594,6 +1627,7 @@ function WritingTimerPanel({
     const rect = panelRef.current?.getBoundingClientRect();
     if (!rect) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    panelRef.current?.classList.add("is-dragging");
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -1625,14 +1659,21 @@ function WritingTimerPanel({
       ),
     };
     positionRef.current = nextPosition;
-    setPosition(nextPosition);
+    if (panelRef.current) {
+      panelRef.current.style.left = "0px";
+      panelRef.current.style.top = "0px";
+      panelRef.current.style.right = "auto";
+      panelRef.current.style.transform = `translate3d(${nextPosition.x}px, ${nextPosition.y}px, 0)`;
+    }
   };
 
   const finishDrag = async (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current = null;
+    panelRef.current?.classList.remove("is-dragging");
     const finalPosition = positionRef.current;
     if (!finalPosition) return;
+    setPosition(finalPosition);
     await db.settings.put({
       key: "timer-position",
       value: finalPosition,
@@ -1743,7 +1784,7 @@ function WritingTimerPanel({
     };
   }, [flush, onSessionEnd, session]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (startWordCountOverride?: number) => {
     const otherActive = (
       await db.sessions.where("state").anyOf(["running", "paused"]).toArray()
     ).sort((a, b) => b.startedAt - a.startedAt)[0];
@@ -1753,7 +1794,6 @@ function WritingTimerPanel({
       }
       return;
     }
-    await flush();
     const startedAt = Date.now();
     const nextSession: WritingSession = {
       id: crypto.randomUUID(),
@@ -1762,7 +1802,7 @@ function WritingTimerPanel({
       startedAt,
       endedAt: null,
       lastHeartbeatAt: startedAt,
-      startWordCount: currentWordCount(),
+      startWordCount: startWordCountOverride ?? currentWordCount(),
       endWordCount: null,
       netWordDelta: null,
       addedWordCount: null,
@@ -1843,18 +1883,30 @@ function WritingTimerPanel({
   }, [segments, session]);
 
   useEffect(() => {
-    if (autoStartSignal <= 0 || autoStartingRef.current) return;
+    if (
+      autoStartSignal <= handledAutoStartSignalRef.current ||
+      autoStartingRef.current
+    ) return;
+    handledAutoStartSignalRef.current = autoStartSignal;
     const action =
-      session === null ? start : session.state === "paused" ? resume : null;
+      session === null
+        ? () => start(autoStartWordCount)
+        : session.state === "paused"
+          ? resume
+          : null;
     if (!action) return;
     autoStartingRef.current = true;
-    const task = window.setTimeout(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       action().finally(() => {
         autoStartingRef.current = false;
       });
-    }, 0);
-    return () => window.clearTimeout(task);
-  }, [autoStartSignal, resume, session, start]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [autoStartSignal, autoStartWordCount, resume, session, start]);
 
   const end = async () => {
     if (!session || session.state === "ended") return;
@@ -1878,7 +1930,12 @@ function WritingTimerPanel({
       className={minimized ? "timer-panel is-minimized" : "timer-panel"}
       style={
         position
-          ? { left: position.x, top: position.y, right: "auto" }
+          ? {
+              left: 0,
+              top: 0,
+              right: "auto",
+              transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
+            }
           : undefined
       }
     >

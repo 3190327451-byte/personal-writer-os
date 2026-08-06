@@ -50,10 +50,12 @@ test("ships the local-first application and PWA assets", async () => {
   ]);
 
   assert.match(app, /personal-writer-os/);
-  assert.match(app, /Autosaves every 5 seconds/);
+  assert.match(app, /}, 5000\);/);
+  assert.match(app, /Saved locally/);
   assert.match(app, /Writing session complete/);
   assert.match(app, /timer-window-titlebar/);
   assert.match(app, /function WritingReminder/);
+  assert.match(app, /Preview reminder/);
   assert.match(app, /settlement-overlay/);
   assert.match(app, /function MaterialsPage/);
   assert.match(app, /function DashboardPage/);
@@ -69,5 +71,9 @@ test("ships the local-first application and PWA assets", async () => {
     access(new URL("../public/cursors/pencil.png", import.meta.url)),
     access(new URL("../public/cursors/dip-pen.png", import.meta.url)),
     access(new URL("../public/cursors/quill.png", import.meta.url)),
+    access(new URL("../public/writing-tools/fountain-pen.png", import.meta.url)),
+    access(new URL("../public/writing-tools/pencil.png", import.meta.url)),
+    access(new URL("../public/writing-tools/dip-pen.png", import.meta.url)),
+    access(new URL("../public/writing-tools/quill.png", import.meta.url)),
   ]);
 });
