@@ -1,4 +1,4 @@
-const CACHE_NAME = "personal-writer-os-v3";
+const CACHE_NAME = "personal-writer-os-v4";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -56,11 +56,17 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname === "/sw.js") return;
 
+  // Content-hashed build assets are served and cached by the host. Letting an
+  // older service worker answer these requests can pair stale HTML with files
+  // from a previous deployment and leave the app unstyled.
+  if (url.pathname.startsWith("/assets/")) return;
+
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;
       return fetch(request).then((response) => {
-        if (response.ok) {
+        const contentType = response.headers.get("content-type") ?? "";
+        if (response.ok && !contentType.includes("text/html")) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }

@@ -72,7 +72,10 @@ function useLocalRouter() {
 
 function registerPwa() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    navigator.serviceWorker
+      .register("/sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update())
+      .catch(() => undefined);
   }
   if (navigator.storage?.persist) {
     navigator.storage.persist().catch(() => undefined);
