@@ -286,6 +286,7 @@ function DesktopChrome({ path, navigate }: { path: string; navigate: Navigate })
   const shortcuts = [
     { label: "New draft", glyph: "W", href: "/write/new" },
     { label: "My works", glyph: "#", href: "/works" },
+    { label: "Overview", glyph: "+", href: "/dashboard" },
     { label: "Materials", glyph: "@", href: "/materials" },
   ];
 
