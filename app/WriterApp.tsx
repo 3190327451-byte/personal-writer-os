@@ -256,6 +256,7 @@ export default function WriterApp() {
   return (
     <div className={isEditor ? "app-shell app-shell--editor" : "app-shell"}>
       <Header path={path} navigate={navigate} compact={isEditor} />
+      {!isEditor && <DesktopChrome path={path} navigate={navigate} />}
       <main className={isEditor ? "main main--editor" : "main"}>
         {route.name === "home" && <HomePage navigate={navigate} />}
         {route.name === "write" && <WorkPickerPage navigate={navigate} />}
@@ -278,6 +279,32 @@ export default function WriterApp() {
         <WritingReminder navigate={navigate} />
       )}
     </div>
+  );
+}
+
+function DesktopChrome({ path, navigate }: { path: string; navigate: Navigate }) {
+  const shortcuts = [
+    { label: "New draft", glyph: "W", href: "/write/new" },
+    { label: "My works", glyph: "#", href: "/works" },
+    { label: "Materials", glyph: "@", href: "/materials" },
+  ];
+
+  return (
+    <>
+      <aside className="desktop-shortcuts" aria-label="Desktop shortcuts">
+        {shortcuts.map((item) => (
+          <button key={item.href} onClick={() => navigate(item.href)}>
+            <span aria-hidden="true">{item.glyph}</span>
+            <small>{item.label}</small>
+          </button>
+        ))}
+      </aside>
+      <div className="desktop-taskbar" aria-hidden="true">
+        <span className="desktop-start">START</span>
+        <span className="desktop-task">▣ Personal Writer OS</span>
+        <span className="desktop-status">LOCAL · {path === "/" ? "HOME" : path.slice(1).toUpperCase()}</span>
+      </div>
+    </>
   );
 }
 
