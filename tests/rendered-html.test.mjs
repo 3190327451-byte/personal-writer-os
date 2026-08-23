@@ -63,7 +63,7 @@ test("ships the local-first application and PWA assets", async () => {
   assert.match(layout, /Personal Writer OS/);
   assert.match(layout, /manifest\.webmanifest/);
   assert.equal(JSON.parse(manifest).display, "standalone");
-  assert.match(serviceWorker, /personal-writer-os-v4/);
+  assert.match(serviceWorker, /personal-writer-os-v5/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/assets\/"\)/);
   await Promise.all([
     access(new URL("../public/icon-192.png", import.meta.url)),

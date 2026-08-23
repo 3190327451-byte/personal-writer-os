@@ -34,6 +34,37 @@ export interface Material {
   updatedAt: number;
 }
 
+export interface MaterialReference {
+  id: string;
+  materialId: string;
+  workId: string;
+  deletedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DeletedWorkSource {
+  id: string;
+  deletedAt: number;
+}
+
+export interface SideNote {
+  id: string;
+  workId: string;
+  title: string;
+  contentHtml: string;
+  color: "pink" | "yellow" | "blue" | "lilac";
+  important: boolean;
+  isOpen: boolean;
+  openedAt: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface WorkSnapshot {
   id: string;
   workId: string;

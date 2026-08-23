@@ -3,12 +3,15 @@
 import Dexie, { type EntityTable } from "dexie";
 import type {
   AppSetting,
+  DeletedWorkSource,
   Material,
+  MaterialReference,
   RecoveryDraft,
   SessionSegment,
   Work,
   WorkSnapshot,
   WritingSession,
+  SideNote,
 } from "./types";
 
 class WriterDatabase extends Dexie {
@@ -19,6 +22,9 @@ class WriterDatabase extends Dexie {
   segments!: EntityTable<SessionSegment, "id">;
   settings!: EntityTable<AppSetting, "key">;
   materials!: EntityTable<Material, "id">;
+  materialReferences!: EntityTable<MaterialReference, "id">;
+  deletedWorks!: EntityTable<DeletedWorkSource, "id">;
+  sideNotes!: EntityTable<SideNote, "id">;
 
   constructor() {
     super("personal-writer-os");
@@ -38,6 +44,18 @@ class WriterDatabase extends Dexie {
       segments: "id, sessionId, startedAt, endedAt",
       settings: "key, updatedAt",
       materials: "id, &url, updatedAt, createdAt",
+    });
+    this.version(3).stores({
+      works: "id, category, updatedAt, createdAt, wordCount, deletedAt",
+      snapshots: "id, workId, [workId+createdAt], createdAt",
+      recoveryDrafts: "workId, savedAt",
+      sessions: "id, workId, state, startedAt, endedAt, lastHeartbeatAt",
+      segments: "id, sessionId, startedAt, endedAt",
+      settings: "key, updatedAt",
+      materials: "id, &url, updatedAt, createdAt",
+      materialReferences: "id, materialId, workId, deletedAt, [workId+materialId]",
+      deletedWorks: "id, deletedAt",
+      sideNotes: "id, workId, [workId+isOpen], openedAt, updatedAt",
     });
   }
 }
@@ -67,7 +85,18 @@ export async function saveRollingSnapshot(
 }
 
 export async function exportBackup() {
-  const [works, snapshots, recoveryDrafts, sessions, segments, settings, materials] =
+  const [
+    works,
+    snapshots,
+    recoveryDrafts,
+    sessions,
+    segments,
+    settings,
+    materials,
+    materialReferences,
+    deletedWorks,
+    sideNotes,
+  ] =
     await Promise.all([
       db.works.toArray(),
       db.snapshots.toArray(),
@@ -76,13 +105,27 @@ export async function exportBackup() {
       db.segments.toArray(),
       db.settings.toArray(),
       db.materials.toArray(),
+      db.materialReferences.toArray(),
+      db.deletedWorks.toArray(),
+      db.sideNotes.toArray(),
     ]);
 
   return {
     product: "Personal Writer OS",
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt: new Date().toISOString(),
-    data: { works, snapshots, recoveryDrafts, sessions, segments, settings, materials },
+    data: {
+      works,
+      snapshots,
+      recoveryDrafts,
+      sessions,
+      segments,
+      settings,
+      materials,
+      materialReferences,
+      deletedWorks,
+      sideNotes,
+    },
   };
 }
 
@@ -98,12 +141,15 @@ export async function importBackup(payload: unknown) {
       segments?: SessionSegment[];
       settings?: AppSetting[];
       materials?: Material[];
+      materialReferences?: MaterialReference[];
+      deletedWorks?: DeletedWorkSource[];
+      sideNotes?: SideNote[];
     };
   };
 
   if (
     backup.product !== "Personal Writer OS" ||
-    ![1, 2].includes(backup.schemaVersion ?? 0) ||
+    ![1, 2, 3].includes(backup.schemaVersion ?? 0) ||
     !backup.data
   ) {
     throw new Error("This is not a valid Personal Writer OS backup.");
@@ -119,6 +165,9 @@ export async function importBackup(payload: unknown) {
       db.segments,
       db.settings,
       db.materials,
+      db.materialReferences,
+      db.deletedWorks,
+      db.sideNotes,
     ],
     async () => {
       if (backup.data?.works?.length) {
@@ -146,6 +195,15 @@ export async function importBackup(payload: unknown) {
       }
       if (backup.data?.materials?.length) {
         await db.materials.bulkPut(backup.data.materials);
+      }
+      if (backup.data?.materialReferences?.length) {
+        await db.materialReferences.bulkPut(backup.data.materialReferences);
+      }
+      if (backup.data?.deletedWorks?.length) {
+        await db.deletedWorks.bulkPut(backup.data.deletedWorks);
+      }
+      if (backup.data?.sideNotes?.length) {
+        await db.sideNotes.bulkPut(backup.data.sideNotes);
       }
     },
   );
