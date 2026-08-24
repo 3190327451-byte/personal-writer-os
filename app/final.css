@@ -719,10 +719,10 @@ textarea {
   position:absolute;
   inset:0;
   z-index:3;
-  display:grid;
+  display:flex;
   width:100%;
-  grid-template-rows:minmax(29px,auto) minmax(44px,1fr) auto auto;
-  align-content:stretch;
+  flex-direction:column;
+  align-items:stretch;
   padding:44px 17px 14px;
   border:0;
   background:transparent;
@@ -747,23 +747,27 @@ textarea {
   position:relative;
   z-index:4;
   display:block;
-  min-height:27px;
-  margin:3px 0 6px;
-  overflow:hidden;
+  width:calc(100% - 68px);
+  max-width:calc(100% - 68px);
+  min-height:32px;
+  flex:0 0 auto;
+  margin:0 0 5px;
+  padding:4px 0 3px;
+  overflow:visible;
   font-size:18px;
-  line-height:1.35;
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  line-height:1.4;
+  text-overflow:clip;
+  white-space:normal;
 }
 .work-card-open > p {
-  min-height:0;
-  max-height:3.15em;
+  min-height:42px;
+  max-height:3.1em;
+  flex:1 1 auto;
   margin:0 0 8px;
   overflow:hidden;
-  align-self:start;
 }
-.work-card-open .work-card-tags { min-height:14px; margin:0 0 7px; }
-.work-card-open .work-card-meta { align-self:end; margin-top:0; padding-top:7px; }
+.work-card-open .work-card-tags { min-height:14px; flex:0 0 auto; margin:0 0 7px; }
+.work-card-open .work-card-meta { flex:0 0 auto; margin-top:0; padding-top:7px; }
 .work-card-menu { position:absolute; z-index:12; top:8px; right:8px; }
 .work-card-menu > summary {
   display:grid;

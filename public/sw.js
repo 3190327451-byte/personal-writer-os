@@ -1,4 +1,4 @@
-const CACHE_NAME = "personal-writer-os-v6";
+const CACHE_NAME = "personal-writer-os-v7";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
