@@ -797,6 +797,59 @@ textarea {
 .export-options,.dialog-actions { display:flex; flex-wrap:wrap; gap:9px; margin-top:20px; }
 .button--danger { border-color:#682344; background:#bf3f72; color:#fff; }
 
+/* Full-library search */
+.library-search { position:relative; display:block; max-width:410px; }
+.library-search input { width:100%; padding-right:34px; }
+.library-search-clear {
+  position:absolute;
+  top:50%;
+  right:5px;
+  display:grid;
+  width:23px;
+  height:23px;
+  place-items:center;
+  padding:0;
+  border:1px solid #716576;
+  border-top-color:#fff;
+  border-left-color:#fff;
+  border-radius:0;
+  background:#e4cbe0;
+  color:#4b315f;
+  font:700 14px/1 Tahoma,Verdana,sans-serif;
+  transform:translateY(-50%);
+  cursor:pointer;
+}
+.library-search-clear:active { transform:translate(1px,calc(-50% + 1px)); }
+.search-summary {
+  display:flex;
+  min-height:39px;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin:0 0 24px;
+  padding:7px 10px;
+  border:1px solid #5f4670;
+  border-top-color:#fff;
+  border-left-color:#fff;
+  background:linear-gradient(90deg,#d8caed,#f2c8e1);
+  box-shadow:3px 3px 0 rgba(64,39,77,.3);
+  color:#4b315f;
+  font:9px var(--pixel-ui);
+}
+.search-summary button {
+  padding:5px 8px;
+  border:1px solid #65486f;
+  border-top-color:#fff;
+  border-left-color:#fff;
+  border-radius:0;
+  background:#fff4fb;
+  color:#4b315f;
+  font:8px var(--pixel-ui);
+  cursor:pointer;
+}
+.search-result-groups { display:grid; gap:34px; }
+.search-result-groups .category-groups { margin:0; }
+
 /* Per-work Side Notes */
 .side-notes-rail {
   position:fixed;

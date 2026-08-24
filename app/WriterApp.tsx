@@ -818,6 +818,7 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
   const [category, setCategory] = useState<WorkCategory>("social-insight");
   const [tag, setTag] = useState("");
   const [query, setQuery] = useState("");
+  const [searchScope, setSearchScope] = useState<"all" | WorkCategory>("all");
   const sorted = [...works].sort((a, b) => {
     if (sort === "created") return b.createdAt - a.createdAt;
     if (sort === "words") return b.wordCount - a.wordCount;
@@ -828,17 +829,28 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
     new Set(categoryWorks.flatMap((work) => work.tags ?? [])),
   ).sort((a, b) => a.localeCompare(b));
   const normalizedQuery = query.trim().toLocaleLowerCase();
-  const visibleWorks = categoryWorks.filter((work) => {
-    const matchesTag = !tag || (work.tags ?? []).includes(tag);
-    const matchesQuery =
-      !normalizedQuery ||
+  const matchesQuery = (work: Work) =>
       work.title.toLocaleLowerCase().includes(normalizedQuery) ||
       work.plainText.toLocaleLowerCase().includes(normalizedQuery) ||
       (work.tags ?? []).some((item) =>
         item.toLocaleLowerCase().includes(normalizedQuery),
       );
-    return matchesTag && matchesQuery;
-  });
+  const visibleWorks = categoryWorks.filter(
+    (work) => !tag || (work.tags ?? []).includes(tag),
+  );
+  const searchResults = normalizedQuery
+    ? sorted.filter(
+        (work) =>
+          (searchScope === "all" || work.category === searchScope) &&
+          matchesQuery(work),
+      )
+    : [];
+  const searchGroups = (Object.keys(CATEGORY_META) as WorkCategory[])
+    .map((item) => ({
+      category: item,
+      works: searchResults.filter((work) => work.category === item),
+    }))
+    .filter((group) => group.works.length);
 
   return (
     <section className="content-page">
@@ -859,11 +871,12 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
           <button
             key={item}
             role="tab"
-            aria-selected={category === item}
-            className={`category-tab theme-${item}${category === item ? " is-active" : ""}`}
+            aria-selected={normalizedQuery ? searchScope === item : category === item}
+            className={`category-tab theme-${item}${(normalizedQuery ? searchScope === item : category === item) ? " is-active" : ""}`}
             onClick={() => {
               setCategory(item);
               setTag("");
+              if (normalizedQuery) setSearchScope(item);
             }}
           >
             <span>{CATEGORY_META[item].shortName}</span>
@@ -877,9 +890,26 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
           <span className="sr-only">Search works</span>
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              const nextQuery = event.target.value;
+              if (!query.trim() && nextQuery.trim()) setSearchScope("all");
+              setQuery(nextQuery);
+            }}
             placeholder="Search title, text, or tag…"
           />
+          {query && (
+            <button
+              type="button"
+              className="library-search-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                setSearchScope("all");
+              }}
+            >
+              ×
+            </button>
+          )}
         </label>
         <label>
           Sort
@@ -895,7 +925,20 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
           </select>
         </label>
       </div>
-      <div className="tag-filter">
+      {normalizedQuery && (
+        <div className="search-summary" role="status">
+          <span>
+            {searchResults.length} matching {searchResults.length === 1 ? "work" : "works"}
+            {searchScope !== "all" ? ` in ${CATEGORY_META[searchScope].name}` : " across all writing types"}
+          </span>
+          {searchScope !== "all" && (
+            <button type="button" onClick={() => setSearchScope("all")}>
+              Search all types
+            </button>
+          )}
+        </div>
+      )}
+      {!normalizedQuery && <div className="tag-filter">
         <button className={!tag ? "is-active" : ""} onClick={() => setTag("")}>
           all
         </button>
@@ -909,8 +952,29 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
           </button>
         ))}
         {!categoryTags.length && <span>No tags in this writing type yet.</span>}
-      </div>
-      {visibleWorks.length ? (
+      </div>}
+      {normalizedQuery ? (
+        searchGroups.length ? (
+          <div className="search-result-groups">
+            {searchGroups.map((group) => (
+              <div className="category-groups" key={group.category}>
+                <div className="category-title">
+                  <span className={`category-dot theme-${group.category}`} />
+                  <h2>{CATEGORY_META[group.category].name}</h2>
+                  <small>{group.works.length}</small>
+                </div>
+                <div className="work-grid">
+                  {group.works.map((work) => (
+                    <WorkCard key={work.id} work={work} navigate={navigate} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-filter">No matching works.</div>
+        )
+      ) : visibleWorks.length ? (
         <div className="category-groups">
           <div className="category-title">
             <span className={`category-dot theme-${category}`} />
