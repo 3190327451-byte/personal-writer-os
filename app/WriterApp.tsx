@@ -1735,6 +1735,8 @@ function SideNotesPanel({ workId }: { workId: string }) {
 function SideNoteWindow({ note }: { note: SideNote }) {
   const cardRef = useRef<HTMLElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const initialContentRef = useRef(note.contentHtml);
+  const selectionRef = useRef<Range | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
 
@@ -1743,6 +1745,29 @@ function SideNoteWindow({ note }: { note: SideNote }) {
     saveTimerRef.current = window.setTimeout(() => {
       db.sideNotes.update(note.id, { ...changes, updatedAt: Date.now() });
     }, delay);
+  };
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (editor) editor.innerHTML = initialContentRef.current;
+  }, [note.id]);
+
+  const rememberSelection = () => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (editor.contains(range.commonAncestorContainer)) {
+      selectionRef.current = range.cloneRange();
+    }
+  };
+
+  const restoreSelection = () => {
+    const range = selectionRef.current;
+    if (!range) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
   };
 
   useEffect(() => {
@@ -1822,9 +1847,13 @@ function SideNoteWindow({ note }: { note: SideNote }) {
   }, []);
 
   const format = (command: string, value?: string) => {
-    editorRef.current?.focus();
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus({ preventScroll: true });
+    restoreSelection();
     document.execCommand(command, false, value);
-    save({ contentHtml: editorRef.current?.innerHTML ?? "" });
+    rememberSelection();
+    save({ contentHtml: editor.innerHTML });
   };
 
   return (
@@ -1903,9 +1932,14 @@ function SideNoteWindow({ note }: { note: SideNote }) {
         className="side-note-editor"
         contentEditable
         suppressContentEditableWarning
-        dangerouslySetInnerHTML={{ __html: note.contentHtml }}
         data-placeholder="Write a character note, setting, loose thought…"
-        onInput={(event) => save({ contentHtml: event.currentTarget.innerHTML })}
+        onFocus={rememberSelection}
+        onKeyUp={rememberSelection}
+        onMouseUp={rememberSelection}
+        onInput={(event) => {
+          rememberSelection();
+          save({ contentHtml: event.currentTarget.innerHTML });
+        }}
       />
       <div className="side-note-status">autosaved</div>
     </article>
