@@ -714,15 +714,16 @@ textarea {
 
 /* Confirmed information architecture and work actions */
 .metric-grid { grid-template-columns:repeat(6,minmax(0,1fr)); }
-.work-card { isolation:isolate; padding:0; }
+.work-card { min-height:214px; isolation:isolate; padding:0; }
 .work-card-open {
   position:absolute;
   inset:0;
   z-index:3;
   display:grid;
   width:100%;
-  align-content:start;
-  padding:46px 17px 15px;
+  grid-template-rows:minmax(29px,auto) minmax(44px,1fr) auto auto;
+  align-content:stretch;
+  padding:44px 17px 14px;
   border:0;
   background:transparent;
   color:inherit;
@@ -742,7 +743,27 @@ textarea {
   transform:none;
   white-space:nowrap;
 }
-.work-card-open > strong { position:relative; z-index:4; }
+.work-card-open > strong {
+  position:relative;
+  z-index:4;
+  display:block;
+  min-height:27px;
+  margin:3px 0 6px;
+  overflow:hidden;
+  font-size:18px;
+  line-height:1.35;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.work-card-open > p {
+  min-height:0;
+  max-height:3.15em;
+  margin:0 0 8px;
+  overflow:hidden;
+  align-self:start;
+}
+.work-card-open .work-card-tags { min-height:14px; margin:0 0 7px; }
+.work-card-open .work-card-meta { align-self:end; margin-top:0; padding-top:7px; }
 .work-card-menu { position:absolute; z-index:12; top:8px; right:8px; }
 .work-card-menu > summary {
   display:grid;
