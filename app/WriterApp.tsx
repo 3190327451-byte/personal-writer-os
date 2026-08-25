@@ -1290,6 +1290,7 @@ function WritingWorkspace({
   recovered: boolean;
   navigate: Navigate;
 }) {
+  const floatingLayerTarget = useFloatingLayerTarget();
   const [title, setTitle] = useState(initialWork.title);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "dirty">(
     recovered ? "dirty" : "saved",
@@ -1594,6 +1595,7 @@ function WritingWorkspace({
           </div>
           <EditorToolbar editor={editor} />
           <EditorContent editor={editor} />
+          <EditorContextMenu editor={editor} category={initialWork.category} />
           <div className="paper-footer">
             <span>{wordCount} words</span>
             <span>{saveStatus === "saved" ? "Saved locally" : "Saving…"}</span>
@@ -1609,15 +1611,16 @@ function WritingWorkspace({
         />
         <SideNotesPanel workId={initialWork.id} />
       </div>
-      {settlementSession && (
-        <div className="settlement-overlay">
+      {settlementSession && floatingLayerTarget && createPortal(
+        <div className={`settlement-overlay theme-${initialWork.category}`}>
           <SettlementForm
             session={settlementSession}
             work={{ ...initialWork, title, wordCount }}
             navigate={navigate}
             onReturn={() => setSettlementSession(null)}
           />
-        </div>
+        </div>,
+        floatingLayerTarget,
       )}
     </div>
   );
@@ -2136,6 +2139,96 @@ function EditorToolbar({
         ↷
       </button>
     </div>
+  );
+}
+
+function EditorContextMenu({
+  editor,
+  category,
+}: {
+  editor: Editor | null;
+  category: WorkCategory;
+}) {
+  const floatingLayerTarget = useFloatingLayerTarget();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const placeMenu = useCallback((x: number, y: number) => {
+    const width = Math.min(390, window.innerWidth - 16);
+    const height = 132;
+    setPosition({
+      x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      y: Math.max(66, Math.min(y, window.innerHeight - height - 8)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!editor) return;
+    const editorElement = editor.view.dom;
+
+    const openAtPointer = (event: MouseEvent) => {
+      event.preventDefault();
+      placeMenu(event.clientX, event.clientY);
+    };
+    const openAtSelection = () => {
+      window.requestAnimationFrame(() => {
+        const { from, to, empty } = editor.state.selection;
+        if (empty) {
+          setPosition(null);
+          return;
+        }
+        const start = editor.view.coordsAtPos(from);
+        const end = editor.view.coordsAtPos(to);
+        const center = (start.left + end.right) / 2 - 190;
+        const above = Math.min(start.top, end.top) - 140;
+        const below = Math.max(start.bottom, end.bottom) + 8;
+        placeMenu(center, above >= 66 ? above : below);
+      });
+    };
+    const closeFromOutside = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setPosition(null);
+      }
+    };
+    const closeFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPosition(null);
+    };
+    const closeFromViewportChange = () => setPosition(null);
+
+    editorElement.addEventListener("contextmenu", openAtPointer);
+    editorElement.addEventListener("mouseup", openAtSelection);
+    document.addEventListener("pointerdown", closeFromOutside);
+    window.addEventListener("resize", closeFromViewportChange);
+    window.addEventListener("scroll", closeFromViewportChange, true);
+    window.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      editorElement.removeEventListener("contextmenu", openAtPointer);
+      editorElement.removeEventListener("mouseup", openAtSelection);
+      document.removeEventListener("pointerdown", closeFromOutside);
+      window.removeEventListener("resize", closeFromViewportChange);
+      window.removeEventListener("scroll", closeFromViewportChange, true);
+      window.removeEventListener("keydown", closeFromKeyboard);
+    };
+  }, [editor, placeMenu]);
+
+  if (!editor || !floatingLayerTarget || !position) return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={`editor-context-menu theme-${category}`}
+      style={{ left: position.x, top: position.y }}
+      role="dialog"
+      aria-label="Text formatting menu"
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="editor-context-menu-titlebar">
+        <span>format.txt</span>
+        <button onClick={() => setPosition(null)} aria-label="Close formatting menu">×</button>
+      </div>
+      <EditorToolbar editor={editor} />
+    </div>,
+    floatingLayerTarget,
   );
 }
 

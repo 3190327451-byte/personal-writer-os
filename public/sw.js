@@ -1,4 +1,4 @@
-const CACHE_NAME = "personal-writer-os-v7";
+const CACHE_NAME = "personal-writer-os-v8";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -14,7 +14,16 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then(async (cache) => {
+        await cache.addAll(APP_SHELL);
+        const shell = await cache.match("/");
+        if (!shell) return;
+        const html = await shell.text();
+        const buildAssets = Array.from(
+          new Set(html.match(/\/assets\/[^\"'<>\s]+/g) ?? []),
+        );
+        await Promise.allSettled(buildAssets.map((path) => cache.add(path)));
+      })
       .then(() => self.skipWaiting()),
   );
 });
@@ -55,11 +64,6 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname === "/sw.js") return;
-
-  // Content-hashed build assets are served and cached by the host. Letting an
-  // older service worker answer these requests can pair stale HTML with files
-  // from a previous deployment and leave the app unstyled.
-  if (url.pathname.startsWith("/assets/")) return;
 
   event.respondWith(
     caches.match(request).then((cached) => {
