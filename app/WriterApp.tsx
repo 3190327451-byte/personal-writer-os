@@ -10,6 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   EditorContent,
   useEditor,
@@ -1622,7 +1623,18 @@ function WritingWorkspace({
   );
 }
 
+function useFloatingLayerTarget() {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setTarget(document.body);
+  }, []);
+
+  return target;
+}
+
 function SideNotesPanel({ workId }: { workId: string }) {
+  const floatingLayerTarget = useFloatingLayerTarget();
   const notes = useLiveQuery(
     () => db.sideNotes.where("workId").equals(workId).toArray(),
     [workId],
@@ -1693,7 +1705,9 @@ function SideNotesPanel({ workId }: { workId: string }) {
     );
   };
 
-  return (
+  if (!floatingLayerTarget) return null;
+
+  return createPortal(
     <>
       <aside className="side-notes-rail" aria-label="Side Notes">
         <div className="side-notes-rail-title">
@@ -1728,7 +1742,8 @@ function SideNotesPanel({ workId }: { workId: string }) {
         .map((note) => (
           <SideNoteWindow key={note.id} note={note} />
         ))}
-    </>
+    </>,
+    floatingLayerTarget,
   );
 }
 
@@ -2184,6 +2199,7 @@ function WritingTimerPanel({
   autoStartWordCount: number;
   onSessionEnd: (session: WritingSession) => void;
 }) {
+  const floatingLayerTarget = useFloatingLayerTarget();
   const [session, setSession] = useState<WritingSession | null>(null);
   const [segments, setSegments] = useState<SessionSegment[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -2540,10 +2556,12 @@ function WritingTimerPanel({
 
   const elapsed = session ? sessionDuration(segments, now) : 0;
 
-  return (
+  if (!floatingLayerTarget) return null;
+
+  return createPortal(
     <aside
       ref={panelRef}
-      className={minimized ? "timer-panel is-minimized" : "timer-panel"}
+      className={`timer-panel theme-${work.category}${minimized ? " is-minimized" : ""}`}
       style={
         position
           ? {
@@ -2609,7 +2627,8 @@ function WritingTimerPanel({
         )}
         {message && <p className="timer-message">{message}</p>}
       </div>
-    </aside>
+    </aside>,
+    floatingLayerTarget,
   );
 }
 
