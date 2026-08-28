@@ -646,9 +646,11 @@ textarea {
 .editor-context-menu-titlebar button { width:20px; height:18px; padding:0; border:1px solid var(--theme-border); background:#f5c7e1; color:#4b315f; cursor:pointer; }
 .editor-context-menu .editor-toolbar { position:static; display:flex; flex-wrap:wrap; gap:3px; top:auto; max-height:none; overflow:visible; padding:4px; border:1px solid var(--theme-border); box-shadow:inset -1px -1px color-mix(in srgb,var(--theme-border),transparent 45%); }
 .editor-context-menu .editor-toolbar button,.editor-context-menu .editor-toolbar select { min-height:25px; padding:3px 6px; font-size:10px; }
-.ProseMirror,.prose-editor { width:min(100%,1180px); max-width:1180px; min-height:59vh; margin:24px auto 0; padding:0 clamp(0px,1vw,12px); color:#2b2630; font-size:17px; line-height:1.86; overflow-wrap:anywhere; word-break:break-word; }
-.ProseMirror ul,.ProseMirror ol,.prose-editor ul,.prose-editor ol { display:block; margin:.65em 0 1em; padding-left:2em; }
-.ProseMirror li,.prose-editor li { display:list-item; }
+.ProseMirror,.prose-editor { width:min(100%,1180px); max-width:1180px; min-height:59vh; margin:24px auto 0; padding:0 clamp(0px,1vw,12px); color:#2b2630; font-size:17px; line-height:32px; overflow-wrap:anywhere; word-break:break-word; }
+.ProseMirror p,.prose-editor p { min-height:32px; margin:0; line-height:32px; }
+.ProseMirror ul,.ProseMirror ol,.prose-editor ul,.prose-editor ol { display:block; margin:0; padding-left:2em; }
+.ProseMirror li,.prose-editor li { display:list-item; margin:0; line-height:32px; }
+.ProseMirror li > p,.prose-editor li > p { min-height:32px; margin:0; }
 .paper-footer { border-radius:0; background:color-mix(in srgb,var(--theme-accent) 21%,var(--theme-paper)); font:10px var(--pixel-ui); }
 
 .timer-panel,.timer-panel.is-minimized { position:fixed; z-index:900; top:78px; right:24px; bottom:auto; left:auto; max-width:calc(100vw - 16px); border-radius:1px; transition:none; will-change:transform; }
@@ -976,16 +978,13 @@ textarea {
 .day-session-list button.is-deleted-work { cursor:default; opacity:.68; }
 .day-session-list button.is-deleted-work strong::after { margin-left:6px; color:#9a6683; content:"archived"; font:7px var(--pixel-ui); }
 
-/* Reflections: each text baseline advances with its ruled-paper rhythm. */
+/* Every editor advances on one 32px rhythm; Reflections draws its rule on that same rhythm. */
 .theme-life-essay .paper {
   background:linear-gradient(90deg,transparent 62px,rgba(205,84,75,.2) 63px 64px,transparent 65px),#fff2b7;
 }
-.theme-life-essay .ProseMirror p,
-.theme-life-essay .prose-editor p {
-  min-height:1.85em;
-  margin:0 0 1.85em;
-  line-height:1.85;
-  background:repeating-linear-gradient(to bottom,transparent 0 calc(1.85em - 1px),rgba(121,83,43,.16) calc(1.85em - 1px) 1.85em);
+.theme-life-essay .ProseMirror,
+.theme-life-essay .prose-editor {
+  background:repeating-linear-gradient(to bottom,transparent 0 31px,rgba(121,83,43,.16) 31px 32px);
 }
 
 /* Desktop responsiveness: no page-level horizontal movement. */

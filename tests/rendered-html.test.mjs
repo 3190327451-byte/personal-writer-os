@@ -42,9 +42,10 @@ test("the catch-all route supports direct editor navigation", async () => {
 });
 
 test("ships the local-first application and PWA assets", async () => {
-  const [app, layout, manifest, serviceWorker] = await Promise.all([
+  const [app, layout, finalCss, manifest, serviceWorker] = await Promise.all([
     readFile(new URL("../app/WriterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/final.css", import.meta.url), "utf8"),
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   ]);
@@ -57,6 +58,10 @@ test("ships the local-first application and PWA assets", async () => {
   assert.match(app, /function WritingReminder/);
   assert.match(app, /Preview reminder/);
   assert.match(app, /settlement-overlay/);
+  assert.match(app, /document-body/);
+  assert.match(app, /\.document-body\{line-height:32px\}/);
+  assert.match(finalCss, /\.ProseMirror p,\.prose-editor p \{ min-height:32px; margin:0; line-height:32px; \}/);
+  assert.match(finalCss, /transparent 0 31px,rgba\(121,83,43,\.16\) 31px 32px/);
   assert.match(app, /function MaterialsPage/);
   assert.match(app, /function DashboardPage/);
   assert.match(app, /parseTags/);

@@ -261,12 +261,12 @@ function workDocumentHtml(work: Work, themed: boolean, notes: SideNote[] = []) {
   <style>
   @page{margin:22mm}body{margin:0;color:#29242d;font:17px/1.8 Georgia,"Times New Roman",serif}
   main{max-width:760px;margin:auto}h1{font:700 30px/1.2 Arial,sans-serif;border-bottom:1px solid #999;padding-bottom:12px}
-  p{margin:0 0 1em}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
+  .document-body{line-height:32px}.document-body p{min-height:32px;margin:0;line-height:32px}.document-body ul,.document-body ol{margin:0;padding-left:2em}.document-body li{margin:0;line-height:32px}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
   body[class]{padding:24px;background:#fff}body.theme-social-insight main{border-top:10px solid #2779d5;padding:24px;background:#edf9ff}
-  body.theme-life-essay main{padding:24px 30px;background:repeating-linear-gradient(#fff3bd 0 31px,#d7b478 32px);line-height:32px}
+  body.theme-life-essay main{padding:24px 30px;background:#fff3bd}body.theme-life-essay .document-body{background:repeating-linear-gradient(to bottom,transparent 0 31px,#d7b478 31px 32px)}
   body.theme-review main{border-inline:14px solid #362440;padding:24px 36px;background:#faf2e7}
   body.theme-fan-fiction main{border:5px double #d93c91;padding:28px;background:#fff0fb}
-  </style></head><body class="${categoryClass.trim()}"><main><h1>${escapeHtml(work.title || "Untitled work")}</h1>${documentToHtml(work.contentJSON)}${sideNotesAppendix(notes)}</main></body></html>`;
+  </style></head><body class="${categoryClass.trim()}"><main><h1>${escapeHtml(work.title || "Untitled work")}</h1><section class="document-body">${documentToHtml(work.contentJSON)}</section>${sideNotesAppendix(notes)}</main></body></html>`;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
