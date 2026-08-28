@@ -2170,21 +2170,6 @@ function EditorContextMenu({
       event.preventDefault();
       placeMenu(event.clientX, event.clientY);
     };
-    const openAtSelection = () => {
-      window.requestAnimationFrame(() => {
-        const { from, to, empty } = editor.state.selection;
-        if (empty) {
-          setPosition(null);
-          return;
-        }
-        const start = editor.view.coordsAtPos(from);
-        const end = editor.view.coordsAtPos(to);
-        const center = (start.left + end.right) / 2 - 190;
-        const above = Math.min(start.top, end.top) - 140;
-        const below = Math.max(start.bottom, end.bottom) + 8;
-        placeMenu(center, above >= 66 ? above : below);
-      });
-    };
     const closeFromOutside = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
         setPosition(null);
@@ -2196,14 +2181,12 @@ function EditorContextMenu({
     const closeFromViewportChange = () => setPosition(null);
 
     editorElement.addEventListener("contextmenu", openAtPointer);
-    editorElement.addEventListener("mouseup", openAtSelection);
     document.addEventListener("pointerdown", closeFromOutside);
     window.addEventListener("resize", closeFromViewportChange);
     window.addEventListener("scroll", closeFromViewportChange, true);
     window.addEventListener("keydown", closeFromKeyboard);
     return () => {
       editorElement.removeEventListener("contextmenu", openAtPointer);
-      editorElement.removeEventListener("mouseup", openAtSelection);
       document.removeEventListener("pointerdown", closeFromOutside);
       window.removeEventListener("resize", closeFromViewportChange);
       window.removeEventListener("scroll", closeFromViewportChange, true);
