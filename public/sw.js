@@ -1,4 +1,7 @@
-const CACHE_NAME = "personal-writer-os-v8";
+const CACHE_NAME = "personal-writer-os-v9";
+const IS_LOCAL_PREVIEW = ["localhost", "127.0.0.1", "::1"].includes(
+  self.location.hostname,
+);
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -11,6 +14,11 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  if (IS_LOCAL_PREVIEW) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
+
   event.waitUntil(
     caches
       .open(CACHE_NAME)
@@ -35,7 +43,11 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key !== CACHE_NAME)
+            .filter((key) =>
+              IS_LOCAL_PREVIEW
+                ? key.startsWith("personal-writer-os-")
+                : key !== CACHE_NAME,
+            )
             .map((key) => caches.delete(key)),
         ),
       )
@@ -44,6 +56,8 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  if (IS_LOCAL_PREVIEW) return;
+
   const request = event.request;
   if (request.method !== "GET") return;
 

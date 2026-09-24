@@ -52,6 +52,8 @@ import {
 
 type Navigate = (path: string) => void;
 
+type ThemeMode = "original" | "day" | "night";
+
 function useLocalRouter() {
   const subscribe = useCallback((onChange: () => void) => {
     window.addEventListener("popstate", onChange);
@@ -74,10 +76,31 @@ function useLocalRouter() {
 
 function registerPwa() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker
-      .register("/sw.js", { updateViaCache: "none" })
-      .then((registration) => registration.update())
-      .catch(() => undefined);
+    const isLocalPreview = ["localhost", "127.0.0.1", "::1"].includes(
+      window.location.hostname,
+    );
+
+    if (isLocalPreview) {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) =>
+          Promise.all(registrations.map((registration) => registration.unregister())),
+        )
+        .then(() => caches.keys())
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => key.startsWith("personal-writer-os-"))
+              .map((key) => caches.delete(key)),
+          ),
+        )
+        .catch(() => undefined);
+    } else {
+      navigator.serviceWorker
+        .register("/sw.js", { updateViaCache: "none" })
+        .then((registration) => registration.update())
+        .catch(() => undefined);
+    }
   }
   if (navigator.storage?.persist) {
     navigator.storage.persist().catch(() => undefined);
@@ -360,10 +383,33 @@ function useRetroSound() {
 
 export default function WriterApp() {
   const { path, navigate } = useLocalRouter();
+  const [themeMode, setThemeMode] = useState<ThemeMode>("original");
+  const [themeReady, setThemeReady] = useState(false);
 
   useEffect(() => {
     registerPwa();
+    const storedTheme = window.localStorage.getItem("personal-writer-os-theme");
+    if (storedTheme === "original" || storedTheme === "day" || storedTheme === "night") {
+      setThemeMode(storedTheme);
+    }
+    setThemeReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!themeReady) return;
+    const skin = {
+      original: "original",
+      day: "crystal-soda",
+      night: "blue-hour",
+    }[themeMode];
+    document.documentElement.dataset.skin = skin;
+    window.localStorage.setItem("personal-writer-os-theme", themeMode);
+    window.localStorage.removeItem("personal-writer-os-color-mode");
+    window.localStorage.removeItem("personal-writer-os-skin");
+    // Keep native controls in light rendering; the app supplies its own night palette.
+    // This avoids browsers with forced-dark behavior dimming the whole Y2K desktop twice.
+    document.documentElement.style.colorScheme = "light";
+  }, [themeMode, themeReady]);
 
   const route = useMemo(() => {
     const settlement = path.match(
@@ -393,7 +439,13 @@ export default function WriterApp() {
 
   return (
     <div className={isEditor ? "app-shell app-shell--editor" : "app-shell"}>
-      <Header path={path} navigate={navigate} compact={isEditor} />
+      <Header
+        path={path}
+        navigate={navigate}
+        compact={isEditor}
+        themeMode={themeMode}
+        onThemeChange={setThemeMode}
+      />
       {!isEditor && <DesktopChrome path={path} navigate={navigate} />}
       <main className={isEditor ? "main main--editor" : "main"}>
         {route.name === "home" && <HomePage navigate={navigate} />}
@@ -450,10 +502,14 @@ function Header({
   path,
   navigate,
   compact,
+  themeMode,
+  onThemeChange,
 }: {
   path: string;
   navigate: Navigate;
   compact: boolean;
+  themeMode: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
 }) {
   const navItems = [
     { label: "Home", href: "/" },
@@ -498,8 +554,57 @@ function Header({
           })}
         </nav>
       )}
-      <DataMenu />
+      <div className="header-actions">
+        <ThemeMenu themeMode={themeMode} onThemeChange={onThemeChange} />
+        <DataMenu />
+      </div>
     </header>
+  );
+}
+
+function ThemeMenu({
+  themeMode,
+  onThemeChange,
+}: {
+  themeMode: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
+}) {
+  const themes: Array<{ value: ThemeMode; label: string; glyph: string }> = [
+    { value: "original", label: "Original", glyph: "▣" },
+    { value: "day", label: "Day", glyph: "☼" },
+    { value: "night", label: "Night", glyph: "☾" },
+  ];
+
+  const chooseTheme = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    theme: ThemeMode,
+  ) => {
+    onThemeChange(theme);
+    event.currentTarget.closest("details")?.removeAttribute("open");
+  };
+
+  return (
+    <DismissibleDetails
+      className="theme-menu"
+      summary={<span aria-hidden="true">☾</span>}
+      summaryAriaLabel="Choose appearance"
+    >
+      <div className="theme-menu-panel" aria-label="Appearance themes">
+        <strong>Appearance</strong>
+        {themes.map((theme) => (
+          <button
+            key={theme.value}
+            type="button"
+            className={themeMode === theme.value ? "is-active" : ""}
+            aria-pressed={themeMode === theme.value}
+            onPointerUp={(event) => chooseTheme(event, theme.value)}
+          >
+            <span aria-hidden="true">{theme.glyph}</span>
+            {theme.label}
+          </button>
+        ))}
+      </div>
+    </DismissibleDetails>
   );
 }
 
@@ -3130,10 +3235,10 @@ function DashboardPage({ navigate }: { navigate: Navigate }) {
       const start = angle;
       angle += (item.words / categoryTotal) * 360;
       const colors: Record<WorkCategory, string> = {
-        "social-insight": "#8290aa",
-        "life-essay": "#d5b37b",
-        review: "#6f6878",
-        "fan-fiction": "#c99db8",
+        "social-insight": "#287fd1",
+        "life-essay": "#f0b64d",
+        review: "#8b4e93",
+        "fan-fiction": "#ec4fa5",
       };
       return `${colors[item.category]} ${start}deg ${angle}deg`;
     })

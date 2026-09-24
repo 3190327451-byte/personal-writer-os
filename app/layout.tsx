@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
-import "./final.css";
+import "./final.css?ui=header-actions-v2";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -47,7 +47,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#78cbd2",
+  themeColor: "#59cbd5",
 };
 
 export default function RootLayout({
