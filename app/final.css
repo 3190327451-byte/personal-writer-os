@@ -1425,6 +1425,10 @@ input::placeholder,textarea::placeholder { color:color-mix(in srgb,var(--skin-co
 :root[data-skin="blue-hour"] .data-popover { color:var(--skin-content-text); }
 :root[data-skin="blue-hour"] .button:not(.button--primary),
 :root[data-skin="blue-hour"] .file-button { background:linear-gradient(var(--skin-control),var(--skin-content)); color:var(--skin-content-text); }
+:root[data-skin="blue-hour"] .data-popover > p { color:#f1f3ff; }
+:root[data-skin="blue-hour"] .data-popover > button,
+:root[data-skin="blue-hour"] .data-popover .sound-toggle,
+:root[data-skin="blue-hour"] .data-popover .sound-toggle small { color:#352f52; }
 :root[data-skin="blue-hour"] .library-toolbar,
 :root[data-skin="blue-hour"] .tag-filter { color:var(--skin-content-text); }
 :root[data-skin="blue-hour"] .metric-grid strong { text-shadow:1px 1px var(--skin-outline); }
