@@ -1472,3 +1472,23 @@ input::placeholder,textarea::placeholder { color:color-mix(in srgb,var(--skin-co
 .header-actions > .data-menu > summary { padding:0 13px; }
 .header-actions > .theme-menu[open] > summary,
 .header-actions > .data-menu[open] > summary { box-shadow:0 2px 0 var(--skin-outline),inset -1px -1px 0 color-mix(in srgb,var(--skin-outline) 62%,transparent); }
+
+/* Night editor: saved colors remain untouched; only their on-screen theme mapping changes. */
+:root[data-skin="blue-hour"] .ProseMirror,
+:root[data-skin="blue-hour"] .prose-editor,
+:root[data-skin="blue-hour"] .ProseMirror *,
+:root[data-skin="blue-hour"] .prose-editor * {
+  color:var(--theme-text)!important;
+}
+:root[data-skin="blue-hour"] .ProseMirror [style*="#a6a29b"],
+:root[data-skin="blue-hour"] .prose-editor [style*="#a6a29b"],
+:root[data-skin="blue-hour"] .ProseMirror [style*="rgb(166, 162, 155)"],
+:root[data-skin="blue-hour"] .prose-editor [style*="rgb(166, 162, 155)"] {
+  color:var(--theme-muted)!important;
+}
+:root[data-skin="blue-hour"] .color-button--black {
+  color:var(--theme-text)!important;
+}
+:root[data-skin="blue-hour"] .color-button--gray {
+  color:var(--theme-muted)!important;
+}

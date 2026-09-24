@@ -2193,16 +2193,16 @@ function EditorToolbar({
       <button
         className="color-button color-button--black"
         onClick={() => editor.chain().focus().setColor("#282724").run()}
-        aria-label="Black text"
-        title="Black text"
+        aria-label="Primary text color"
+        title="Primary text color"
       >
         A
       </button>
       <button
         className="color-button color-button--gray"
         onClick={() => editor.chain().focus().setColor("#a6a29b").run()}
-        aria-label="Gray text"
-        title="Gray text"
+        aria-label="Muted text color"
+        title="Muted text color"
       >
         A
       </button>
