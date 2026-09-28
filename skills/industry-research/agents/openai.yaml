@@ -1,0 +1,7 @@
+interface:
+  display_name: "行业调研"
+  short_description: "持续吸收新材料，维护精简且证据清晰的行业研究报告"
+  default_prompt: "使用 $industry-research 研究一个行业，并产出精简、证据清晰、可支持决策的报告。"
+
+policy:
+  allow_implicit_invocation: true
