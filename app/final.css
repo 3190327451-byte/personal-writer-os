@@ -651,6 +651,12 @@ textarea {
 .ProseMirror ul,.ProseMirror ol,.prose-editor ul,.prose-editor ol { display:block; margin:0; padding-left:2em; }
 .ProseMirror li,.prose-editor li { display:list-item; margin:0; line-height:32px; }
 .ProseMirror li > p,.prose-editor li > p { min-height:32px; margin:0; }
+.chapter-break { display:grid; min-height:96px; grid-template-columns:minmax(28px,1fr) minmax(140px,auto) minmax(28px,1fr) 24px; align-items:center; gap:9px; padding-top:32px; color:var(--theme-text); user-select:none; }
+.chapter-break-rule { border-top:2px solid var(--theme-border); box-shadow:0 1px var(--theme-light); }
+.chapter-break input { width:min(330px,44vw); min-width:140px; height:32px; padding:3px 9px; border:1px solid var(--theme-border); border-top-color:var(--theme-light); border-left-color:var(--theme-light); border-radius:0; background:color-mix(in srgb,var(--theme-paper) 84%,var(--theme-light)); color:var(--theme-text); font:700 16px/24px Georgia,"Times New Roman",serif; text-align:center; user-select:text; }
+.chapter-break button { width:24px; height:24px; padding:0; border:1px solid var(--theme-border); border-top-color:var(--theme-light); border-left-color:var(--theme-light); border-radius:0; background:color-mix(in srgb,var(--theme-paper) 72%,var(--theme-accent)); color:var(--theme-text); cursor:pointer; }
+.chapter-break.is-selected { outline:1px dotted var(--theme-accent); outline-offset:3px; }
+.chapter-jump select { max-width:180px; }
 .paper-footer { border-radius:0; background:color-mix(in srgb,var(--theme-accent) 21%,var(--theme-paper)); font:10px var(--pixel-ui); }
 
 .timer-panel,.timer-panel.is-minimized { position:fixed; z-index:900; top:78px; right:24px; bottom:auto; left:auto; max-width:calc(100vw - 16px); border-radius:1px; transition:none; will-change:transform; }
@@ -826,6 +832,10 @@ textarea {
 .work-action-dialog h2 { margin:0 0 12px; color:#452750; font:700 21px Tahoma,Verdana,sans-serif; }
 .work-action-dialog p { color:#5d4a62; line-height:1.6; }
 .export-side-notes { display:flex; gap:8px; align-items:center; margin:18px 0; font:12px Tahoma,Verdana,sans-serif; }
+.export-chapters { display:grid; max-height:190px; gap:5px; margin:14px 0; padding:10px; overflow:auto; border:1px solid var(--shell-violet); background:rgba(255,255,255,.34); }
+.export-chapters legend { padding:0 6px; font:700 12px Tahoma,Verdana,sans-serif; }
+.export-chapters label { display:flex; min-height:27px; align-items:center; gap:8px; padding:3px 6px; border-bottom:1px dotted rgba(75,49,95,.35); font:13px Tahoma,Verdana,sans-serif; }
+.export-message { display:block; margin-top:10px; color:var(--theme-text); font:700 12px Tahoma,Verdana,sans-serif; }
 .export-options,.dialog-actions { display:flex; flex-wrap:wrap; gap:9px; margin-top:20px; }
 .button--danger { border-color:#682344; background:#bf3f72; color:#fff; }
 

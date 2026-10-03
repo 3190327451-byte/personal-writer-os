@@ -13,9 +13,14 @@ import {
 import { createPortal } from "react-dom";
 import {
   EditorContent,
+  Node as TiptapNode,
+  NodeViewWrapper,
+  ReactNodeViewRenderer,
+  mergeAttributes,
   useEditor,
   type Editor,
   type JSONContent,
+  type NodeViewProps,
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -53,6 +58,82 @@ import {
 type Navigate = (path: string) => void;
 
 type ThemeMode = "original" | "day" | "night";
+
+function ChapterBreakView({ node, updateAttributes, deleteNode, selected }: NodeViewProps) {
+  const [title, setTitle] = useState(String(node.attrs.title || "New chapter"));
+
+  useEffect(() => {
+    setTitle(String(node.attrs.title || "New chapter"));
+  }, [node.attrs.title]);
+
+  const commitTitle = () => {
+    const nextTitle = title.trim() || "New chapter";
+    setTitle(nextTitle);
+    updateAttributes({ title: nextTitle });
+  };
+
+  return (
+    <NodeViewWrapper
+      className={`chapter-break${selected ? " is-selected" : ""}`}
+      data-chapter-id={node.attrs.id}
+      contentEditable={false}
+    >
+      <span className="chapter-break-rule" aria-hidden="true" />
+      <input
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        onBlur={commitTitle}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        aria-label="Chapter title"
+      />
+      <span className="chapter-break-rule" aria-hidden="true" />
+      <button type="button" onClick={deleteNode} aria-label="Remove chapter break" title="Remove chapter break">
+        ×
+      </button>
+    </NodeViewWrapper>
+  );
+}
+
+const ChapterBreak = TiptapNode.create({
+  name: "chapterBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      id: { default: null },
+      title: { default: "New chapter" },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "div[data-chapter-break]",
+        getAttrs: (element) => ({
+          id: (element as HTMLElement).dataset.chapterId || crypto.randomUUID(),
+          title: (element as HTMLElement).dataset.chapterTitle || "New chapter",
+        }),
+      },
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return [
+      "div",
+      mergeAttributes(HTMLAttributes, {
+        "data-chapter-break": "true",
+        "data-chapter-id": HTMLAttributes.id,
+        "data-chapter-title": HTMLAttributes.title,
+      }),
+      HTMLAttributes.title || "New chapter",
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ChapterBreakView);
+  },
+});
 
 function useLocalRouter() {
   const subscribe = useCallback((onChange: () => void) => {
@@ -239,6 +320,83 @@ function escapeHtml(value: string) {
     .replaceAll('"', "&quot;");
 }
 
+type ChapterSection = {
+  id: string;
+  title: string;
+  content: JSONContent[];
+  hasHeading: boolean;
+};
+
+function inlinePlainText(node: JSONContent): string {
+  if (node.type === "text") return node.text ?? "";
+  if (node.type === "hardBreak") return "\n";
+  return node.content?.map(inlinePlainText).join("") ?? "";
+}
+
+function nodePlainText(node: JSONContent): string {
+  if (node.type === "text" || node.type === "hardBreak") return inlinePlainText(node);
+  if (node.type === "chapterBreak") return `${String(node.attrs?.title || "New chapter")}\n\n`;
+  if (node.type === "bulletList" || node.type === "orderedList") {
+    return (node.content ?? [])
+      .map((item, index) => `${node.type === "orderedList" ? `${index + 1}.` : "•"} ${inlinePlainText(item).trim()}\n`)
+      .join("");
+  }
+  const text = inlinePlainText(node);
+  return ["paragraph", "heading", "listItem"].includes(node.type ?? "") ? `${text}\n` : text;
+}
+
+function documentToPlainText(content: JSONContent): string {
+  return (content.content ?? [])
+    .map(nodePlainText)
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function hasReadableContent(nodes: JSONContent[]) {
+  return nodes.some((node) => documentToPlainText({ type: "doc", content: [node] }).trim());
+}
+
+function chapterSections(content: JSONContent): ChapterSection[] {
+  const nodes = content.content ?? [];
+  const breaks = nodes.filter((node) => node.type === "chapterBreak");
+  if (!breaks.length) {
+    return [{ id: "full-text", title: "Full text", content: nodes, hasHeading: false }];
+  }
+
+  const sections: ChapterSection[] = [];
+  let current: ChapterSection = {
+    id: "opening",
+    title: "Opening",
+    content: [],
+    hasHeading: false,
+  };
+  for (const node of nodes) {
+    if (node.type === "chapterBreak") {
+      if (current.hasHeading || hasReadableContent(current.content)) sections.push(current);
+      current = {
+        id: String(node.attrs?.id || crypto.randomUUID()),
+        title: String(node.attrs?.title || "New chapter"),
+        content: [node],
+        hasHeading: true,
+      };
+    } else {
+      current.content.push(node);
+    }
+  }
+  if (current.hasHeading || hasReadableContent(current.content)) sections.push(current);
+  return sections;
+}
+
+function contentForSections(sections: ChapterSection[], selectedIds: Set<string>): JSONContent {
+  return {
+    type: "doc",
+    content: sections
+      .filter((section) => selectedIds.has(section.id))
+      .flatMap((section) => section.content),
+  };
+}
+
 function documentToHtml(content: JSONContent): string {
   const render = (node: JSONContent): string => {
     const children = node.content?.map(render).join("") ?? "";
@@ -253,8 +411,19 @@ function documentToHtml(content: JSONContent): string {
         if (mark.type === "highlight") {
           text = `<mark style="background:${escapeHtml(String(mark.attrs?.color ?? "#fff1a8"))}">${text}</mark>`;
         }
+        if (mark.type === "textStyle") {
+          const styles: string[] = [];
+          const color = String(mark.attrs?.color ?? "");
+          const fontSize = String(mark.attrs?.fontSize ?? "");
+          if (/^#[0-9a-f]{3,8}$/i.test(color) || /^rgb[a]?\([\d\s,.%]+\)$/i.test(color)) styles.push(`color:${color}`);
+          if (/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i.test(fontSize)) styles.push(`font-size:${fontSize}`);
+          if (styles.length) text = `<span style="${styles.join(";")}">${text}</span>`;
+        }
       }
       return text;
+    }
+    if (node.type === "chapterBreak") {
+      return `<h2 class="chapter-heading">${escapeHtml(String(node.attrs?.title || "New chapter"))}</h2>`;
     }
     if (node.type === "paragraph") return `<p>${children || "<br>"}</p>`;
     if (node.type === "heading") return `<h${node.attrs?.level ?? 2}>${children}</h${node.attrs?.level ?? 2}>`;
@@ -284,7 +453,7 @@ function workDocumentHtml(work: Work, themed: boolean, notes: SideNote[] = []) {
   <style>
   @page{margin:22mm}body{margin:0;color:#29242d;font:17px/1.8 Georgia,"Times New Roman",serif}
   main{max-width:760px;margin:auto}h1{font:700 30px/1.2 Arial,sans-serif;border-bottom:1px solid #999;padding-bottom:12px}
-  .document-body{line-height:32px}.document-body p{min-height:32px;margin:0;line-height:32px}.document-body ul,.document-body ol{margin:0;padding-left:2em}.document-body li{margin:0;line-height:32px}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
+  .document-body{line-height:32px}.document-body p{min-height:32px;margin:0;line-height:32px}.document-body ul,.document-body ol{margin:0;padding-left:2em}.document-body li{margin:0;line-height:32px}.chapter-heading{margin:32px 0 16px;padding:0 0 8px;border-bottom:2px solid #888;font:700 22px/1.45 Arial,sans-serif}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
   body[class]{padding:24px;background:#fff}body.theme-social-insight main{border-top:10px solid #2779d5;padding:24px;background:#edf9ff}
   body.theme-life-essay main{padding:24px 30px;background:#fff3bd}body.theme-life-essay .document-body{background:repeating-linear-gradient(to bottom,transparent 0 31px,#d7b478 31px 32px)}
   body.theme-review main{border-inline:14px solid #362440;padding:24px 36px;background:#faf2e7}
@@ -305,6 +474,13 @@ function exportWord(work: Work, notes: SideNote[] = []) {
   downloadBlob(
     new Blob([workDocumentHtml(work, false, notes)], { type: "application/msword;charset=utf-8" }),
     `${safeFileName(work.title)}.doc`,
+  );
+}
+
+function exportPlainText(work: Work) {
+  downloadBlob(
+    new Blob([documentToPlainText(work.contentJSON)], { type: "text/plain;charset=utf-8" }),
+    `${safeFileName(work.title)}.txt`,
   );
 }
 
@@ -1103,6 +1279,11 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
 function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
   const [dialog, setDialog] = useState<"delete" | "export" | null>(null);
   const [includeSideNotes, setIncludeSideNotes] = useState(false);
+  const exportSections = useMemo(() => chapterSections(work.contentJSON), [work.contentJSON]);
+  const [selectedSectionIds, setSelectedSectionIds] = useState<Set<string>>(
+    () => new Set(exportSections.map((section) => section.id)),
+  );
+  const [exportMessage, setExportMessage] = useState("");
   const sideNotes = useLiveQuery(
     () => db.sideNotes.where("workId").equals(work.id).toArray(),
     [work.id],
@@ -1118,6 +1299,39 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
     [work.id],
   );
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (dialog === "export") {
+      setSelectedSectionIds(new Set(exportSections.map((section) => section.id)));
+      setExportMessage("");
+    }
+  }, [dialog, exportSections]);
+
+  const selectedExportWork = useMemo(() => {
+    const contentJSON = contentForSections(exportSections, selectedSectionIds);
+    const plainText = documentToPlainText(contentJSON);
+    return {
+      ...work,
+      contentJSON,
+      plainText,
+      wordCount: countWords(plainText),
+    };
+  }, [exportSections, selectedSectionIds, work]);
+
+  const toggleExportSection = (id: string) => {
+    setSelectedSectionIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const copyExportText = async () => {
+    if (!selectedExportWork.plainText) return;
+    await navigator.clipboard.writeText(selectedExportWork.plainText);
+    setExportMessage("Body copied");
+  };
 
   const confirmDelete = async () => {
     if (deleting || activeSession) return;
@@ -1193,7 +1407,22 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
             ) : (
               <>
                 <h2>Export “{work.title || "Untitled work"}”</h2>
-                <p>Word stays clean and editable. PDF can be clean or keep this writing type’s visual theme.</p>
+                <p>Choose the chapters you want, then copy clean body text or export an editable or printable file.</p>
+                {exportSections.length > 1 && (
+                  <fieldset className="export-chapters">
+                    <legend>Export range</legend>
+                    {exportSections.map((section) => (
+                      <label key={section.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSectionIds.has(section.id)}
+                          onChange={() => toggleExportSection(section.id)}
+                        />
+                        <span>{section.title}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
                 {!!sideNotes.length && (
                   <label className="export-side-notes">
                     <input
@@ -1205,10 +1434,13 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
                   </label>
                 )}
                 <div className="export-options">
-                  <button className="button button--secondary" onClick={() => exportWord(work, includeSideNotes ? sideNotes : [])}>Word (.doc)</button>
-                  <button className="button button--secondary" onClick={() => exportPdf(work, false, includeSideNotes ? sideNotes : [])}>Clean PDF</button>
-                  <button className="button button--primary" onClick={() => exportPdf(work, true, includeSideNotes ? sideNotes : [])}>Themed PDF</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={copyExportText}>Copy body</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportPlainText(selectedExportWork)}>Text (.txt)</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportWord(selectedExportWork, includeSideNotes ? sideNotes : [])}>Word (.doc)</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportPdf(selectedExportWork, false, includeSideNotes ? sideNotes : [])}>Clean PDF</button>
+                  <button className="button button--primary" disabled={!selectedSectionIds.size} onClick={() => exportPdf(selectedExportWork, true, includeSideNotes ? sideNotes : [])}>Themed PDF</button>
                 </div>
+                {exportMessage && <small className="export-message" role="status">{exportMessage}</small>}
               </>
             )}
           </section>
@@ -1405,6 +1637,11 @@ function WritingWorkspace({
   const [typingSignal, setTypingSignal] = useState(0);
   const [tags, setTags] = useState(initialWork.tags ?? []);
   const [tagDraft, setTagDraft] = useState("");
+  const [chapterItems, setChapterItems] = useState(() =>
+    chapterSections(initialWork.contentJSON)
+      .filter((section) => section.hasHeading)
+      .map(({ id, title }) => ({ id, title })),
+  );
   const [settlementSession, setSettlementSession] =
     useState<WritingSession | null>(null);
   const latestRef = useRef({
@@ -1434,6 +1671,7 @@ function WritingWorkspace({
     immediatelyRender: false,
     extensions: [
       StarterKit.configure({ link: false }),
+      ChapterBreak,
       TextStyle,
       FontSize,
       Color,
@@ -1478,6 +1716,11 @@ function WritingWorkspace({
     onUpdate({ editor: currentEditor }) {
       const plainText = currentEditor.getText({ blockSeparator: "\n" });
       const nextWordCount = countWords(plainText);
+      setChapterItems(
+        chapterSections(currentEditor.getJSON())
+          .filter((section) => section.hasHeading)
+          .map(({ id, title }) => ({ id, title })),
+      );
       latestRef.current = {
         ...latestRef.current,
         contentJSON: currentEditor.getJSON(),
@@ -1579,6 +1822,11 @@ function WritingWorkspace({
   const applySnapshot = (snapshot: WorkSnapshot) => {
     if (!editor) return;
     editor.commands.setContent(snapshot.contentJSON);
+    setChapterItems(
+      chapterSections(snapshot.contentJSON)
+        .filter((section) => section.hasHeading)
+        .map(({ id, title }) => ({ id, title })),
+    );
     setTitle(snapshot.title);
     latestRef.current = {
       title: snapshot.title,
@@ -1698,7 +1946,7 @@ function WritingWorkspace({
               />
             </label>
           </div>
-          <EditorToolbar editor={editor} />
+          <EditorToolbar editor={editor} chapters={chapterItems} showChapterControls />
           <EditorContent editor={editor} />
           <EditorContextMenu editor={editor} category={initialWork.category} />
           <div className="paper-footer">
@@ -2110,8 +2358,12 @@ function SnapshotMenu({
 
 function EditorToolbar({
   editor,
+  chapters = [],
+  showChapterControls = false,
 }: {
   editor: Editor | null;
+  chapters?: { id: string; title: string }[];
+  showChapterControls?: boolean;
 }) {
   if (!editor) return <div className="editor-toolbar" aria-hidden="true" />;
 
@@ -2129,6 +2381,36 @@ function EditorToolbar({
       .extendMarkRange("link")
       .setLink({ href: url.trim() })
       .run();
+  };
+
+  const insertChapter = () => {
+    const title = window.prompt("Chapter title", "New chapter");
+    if (title === null) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent([
+        {
+          type: "chapterBreak",
+          attrs: { id: crypto.randomUUID(), title: title.trim() || "New chapter" },
+        },
+        { type: "paragraph" },
+      ])
+      .run();
+  };
+
+  const jumpToChapter = (id: string) => {
+    let targetPosition: number | null = null;
+    editor.state.doc.descendants((node, position) => {
+      if (node.type.name === "chapterBreak" && node.attrs.id === id) {
+        targetPosition = position;
+        return false;
+      }
+      return targetPosition === null;
+    });
+    if (targetPosition !== null) {
+      editor.chain().focus().setNodeSelection(targetPosition).scrollIntoView().run();
+    }
   };
 
   return (
@@ -2174,6 +2456,31 @@ function EditorToolbar({
       <button onClick={setLink} aria-label="Insert web link" title="Insert web link">
         Link
       </button>
+      {showChapterControls && (
+        <>
+          <span className="toolbar-divider" />
+          <button onClick={insertChapter} aria-label="Insert chapter break" title="Insert chapter break">
+            ＋ Chapter
+          </button>
+          {!!chapters.length && (
+            <label className="toolbar-select chapter-jump">
+              <span className="sr-only">Jump to chapter</span>
+              <select
+                value=""
+                onChange={(event) => {
+                  if (event.target.value) jumpToChapter(event.target.value);
+                }}
+                aria-label="Jump to chapter"
+              >
+                <option value="">Jump to…</option>
+                {chapters.map((chapter) => (
+                  <option key={chapter.id} value={chapter.id}>{chapter.title}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </>
+      )}
       <span className="toolbar-divider" />
       <label className="toolbar-select">
         <span className="sr-only">Font size</span>
