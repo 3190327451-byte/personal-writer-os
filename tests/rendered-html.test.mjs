@@ -68,7 +68,7 @@ test("ships the local-first application and PWA assets", async () => {
   assert.match(layout, /Personal Writer OS/);
   assert.match(layout, /manifest\.webmanifest/);
   assert.equal(JSON.parse(manifest).display, "standalone");
-  assert.match(serviceWorker, /personal-writer-os-v10/);
+  assert.match(serviceWorker, /personal-writer-os-v11/);
   assert.match(app, /ChapterBreak/);
   assert.match(app, /Copy body/);
   assert.match(app, /Export range/);
