@@ -13,9 +13,14 @@ import {
 import { createPortal } from "react-dom";
 import {
   EditorContent,
+  Node as TiptapNode,
+  NodeViewWrapper,
+  ReactNodeViewRenderer,
+  mergeAttributes,
   useEditor,
   type Editor,
   type JSONContent,
+  type NodeViewProps,
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -52,6 +57,84 @@ import {
 
 type Navigate = (path: string) => void;
 
+type ThemeMode = "original" | "day" | "night";
+
+function ChapterBreakView({ node, updateAttributes, deleteNode, selected }: NodeViewProps) {
+  const [title, setTitle] = useState(String(node.attrs.title || "New chapter"));
+
+  useEffect(() => {
+    setTitle(String(node.attrs.title || "New chapter"));
+  }, [node.attrs.title]);
+
+  const commitTitle = () => {
+    const nextTitle = title.trim() || "New chapter";
+    setTitle(nextTitle);
+    updateAttributes({ title: nextTitle });
+  };
+
+  return (
+    <NodeViewWrapper
+      className={`chapter-break${selected ? " is-selected" : ""}`}
+      data-chapter-id={node.attrs.id}
+      contentEditable={false}
+    >
+      <span className="chapter-break-rule" aria-hidden="true" />
+      <input
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        onBlur={commitTitle}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+        aria-label="Chapter title"
+      />
+      <span className="chapter-break-rule" aria-hidden="true" />
+      <button type="button" onClick={deleteNode} aria-label="Remove chapter break" title="Remove chapter break">
+        ×
+      </button>
+    </NodeViewWrapper>
+  );
+}
+
+const ChapterBreak = TiptapNode.create({
+  name: "chapterBreak",
+  group: "block",
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      id: { default: null },
+      title: { default: "New chapter" },
+    };
+  },
+  parseHTML() {
+    return [
+      {
+        tag: "div[data-chapter-break]",
+        getAttrs: (element) => ({
+          id: (element as HTMLElement).dataset.chapterId || crypto.randomUUID(),
+          title: (element as HTMLElement).dataset.chapterTitle || "New chapter",
+        }),
+      },
+    ];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return [
+      "div",
+      mergeAttributes(HTMLAttributes, {
+        "data-chapter-break": "true",
+        "data-chapter-id": HTMLAttributes.id,
+        "data-chapter-title": HTMLAttributes.title,
+      }),
+      HTMLAttributes.title || "New chapter",
+    ];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ChapterBreakView);
+  },
+});
+
 function useLocalRouter() {
   const subscribe = useCallback((onChange: () => void) => {
     window.addEventListener("popstate", onChange);
@@ -74,10 +157,31 @@ function useLocalRouter() {
 
 function registerPwa() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker
-      .register("/sw.js", { updateViaCache: "none" })
-      .then((registration) => registration.update())
-      .catch(() => undefined);
+    const isLocalPreview = ["localhost", "127.0.0.1", "::1"].includes(
+      window.location.hostname,
+    );
+
+    if (isLocalPreview) {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) =>
+          Promise.all(registrations.map((registration) => registration.unregister())),
+        )
+        .then(() => caches.keys())
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => key.startsWith("personal-writer-os-"))
+              .map((key) => caches.delete(key)),
+          ),
+        )
+        .catch(() => undefined);
+    } else {
+      navigator.serviceWorker
+        .register("/sw.js", { updateViaCache: "none" })
+        .then((registration) => registration.update())
+        .catch(() => undefined);
+    }
   }
   if (navigator.storage?.persist) {
     navigator.storage.persist().catch(() => undefined);
@@ -216,6 +320,83 @@ function escapeHtml(value: string) {
     .replaceAll('"', "&quot;");
 }
 
+type ChapterSection = {
+  id: string;
+  title: string;
+  content: JSONContent[];
+  hasHeading: boolean;
+};
+
+function inlinePlainText(node: JSONContent): string {
+  if (node.type === "text") return node.text ?? "";
+  if (node.type === "hardBreak") return "\n";
+  return node.content?.map(inlinePlainText).join("") ?? "";
+}
+
+function nodePlainText(node: JSONContent): string {
+  if (node.type === "text" || node.type === "hardBreak") return inlinePlainText(node);
+  if (node.type === "chapterBreak") return `${String(node.attrs?.title || "New chapter")}\n\n`;
+  if (node.type === "bulletList" || node.type === "orderedList") {
+    return (node.content ?? [])
+      .map((item, index) => `${node.type === "orderedList" ? `${index + 1}.` : "•"} ${inlinePlainText(item).trim()}\n`)
+      .join("");
+  }
+  const text = inlinePlainText(node);
+  return ["paragraph", "heading", "listItem"].includes(node.type ?? "") ? `${text}\n` : text;
+}
+
+function documentToPlainText(content: JSONContent): string {
+  return (content.content ?? [])
+    .map(nodePlainText)
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function hasReadableContent(nodes: JSONContent[]) {
+  return nodes.some((node) => documentToPlainText({ type: "doc", content: [node] }).trim());
+}
+
+function chapterSections(content: JSONContent): ChapterSection[] {
+  const nodes = content.content ?? [];
+  const breaks = nodes.filter((node) => node.type === "chapterBreak");
+  if (!breaks.length) {
+    return [{ id: "full-text", title: "Full text", content: nodes, hasHeading: false }];
+  }
+
+  const sections: ChapterSection[] = [];
+  let current: ChapterSection = {
+    id: "opening",
+    title: "Opening",
+    content: [],
+    hasHeading: false,
+  };
+  for (const node of nodes) {
+    if (node.type === "chapterBreak") {
+      if (current.hasHeading || hasReadableContent(current.content)) sections.push(current);
+      current = {
+        id: String(node.attrs?.id || crypto.randomUUID()),
+        title: String(node.attrs?.title || "New chapter"),
+        content: [node],
+        hasHeading: true,
+      };
+    } else {
+      current.content.push(node);
+    }
+  }
+  if (current.hasHeading || hasReadableContent(current.content)) sections.push(current);
+  return sections;
+}
+
+function contentForSections(sections: ChapterSection[], selectedIds: Set<string>): JSONContent {
+  return {
+    type: "doc",
+    content: sections
+      .filter((section) => selectedIds.has(section.id))
+      .flatMap((section) => section.content),
+  };
+}
+
 function documentToHtml(content: JSONContent): string {
   const render = (node: JSONContent): string => {
     const children = node.content?.map(render).join("") ?? "";
@@ -230,8 +411,19 @@ function documentToHtml(content: JSONContent): string {
         if (mark.type === "highlight") {
           text = `<mark style="background:${escapeHtml(String(mark.attrs?.color ?? "#fff1a8"))}">${text}</mark>`;
         }
+        if (mark.type === "textStyle") {
+          const styles: string[] = [];
+          const color = String(mark.attrs?.color ?? "");
+          const fontSize = String(mark.attrs?.fontSize ?? "");
+          if (/^#[0-9a-f]{3,8}$/i.test(color) || /^rgb[a]?\([\d\s,.%]+\)$/i.test(color)) styles.push(`color:${color}`);
+          if (/^\d+(?:\.\d+)?(?:px|pt|em|rem|%)$/i.test(fontSize)) styles.push(`font-size:${fontSize}`);
+          if (styles.length) text = `<span style="${styles.join(";")}">${text}</span>`;
+        }
       }
       return text;
+    }
+    if (node.type === "chapterBreak") {
+      return `<h2 class="chapter-heading">${escapeHtml(String(node.attrs?.title || "New chapter"))}</h2>`;
     }
     if (node.type === "paragraph") return `<p>${children || "<br>"}</p>`;
     if (node.type === "heading") return `<h${node.attrs?.level ?? 2}>${children}</h${node.attrs?.level ?? 2}>`;
@@ -261,12 +453,16 @@ function workDocumentHtml(work: Work, themed: boolean, notes: SideNote[] = []) {
   <style>
   @page{margin:22mm}body{margin:0;color:#29242d;font:17px/1.8 Georgia,"Times New Roman",serif}
   main{max-width:760px;margin:auto}h1{font:700 30px/1.2 Arial,sans-serif;border-bottom:1px solid #999;padding-bottom:12px}
-  p{margin:0 0 1em}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
+  .document-body{line-height:32px}.document-body p{min-height:32px;margin:0;line-height:32px}.document-body ul,.document-body ol{margin:0;padding-left:2em}.document-body li{margin:0;line-height:32px}.chapter-heading{margin:40px 0 20px;padding:0 0 9px;border-bottom:1px solid #8f8992;color:#342d38;font:700 22px/1.45 Arial,sans-serif;break-after:avoid}a{color:#2b61a7}mark{padding:0 2px}.side-notes-appendix{break-before:page;margin-top:50px;border-top:2px solid #888}.side-notes-appendix article{margin:22px 0;padding:12px;border:1px solid #bbb}
   body[class]{padding:24px;background:#fff}body.theme-social-insight main{border-top:10px solid #2779d5;padding:24px;background:#edf9ff}
-  body.theme-life-essay main{padding:24px 30px;background:repeating-linear-gradient(#fff3bd 0 31px,#d7b478 32px);line-height:32px}
+  body.theme-life-essay main{padding:24px 30px;background:#fff3bd}body.theme-life-essay .document-body{background:repeating-linear-gradient(to bottom,transparent 0 31px,#d7b478 31px 32px)}
   body.theme-review main{border-inline:14px solid #362440;padding:24px 36px;background:#faf2e7}
   body.theme-fan-fiction main{border:5px double #d93c91;padding:28px;background:#fff0fb}
-  </style></head><body class="${categoryClass.trim()}"><main><h1>${escapeHtml(work.title || "Untitled work")}</h1>${documentToHtml(work.contentJSON)}${sideNotesAppendix(notes)}</main></body></html>`;
+  body.theme-social-insight .chapter-heading{padding-left:12px;border-bottom:2px solid #2779d5;border-left:6px solid #2779d5;color:#1f477f}
+  body.theme-life-essay .chapter-heading{text-align:center;border-bottom:1px solid #c9954f;color:#744b35;font-family:Georgia,"Times New Roman",serif}
+  body.theme-review .chapter-heading{padding:7px 12px;border:0;border-block:3px dotted #5a314d;background:#e6d6d5;color:#5a314d;letter-spacing:.04em}
+  body.theme-fan-fiction .chapter-heading{text-align:center;border-bottom:2px solid #d93c91;color:#a72e68;font-family:Georgia,"Times New Roman",serif}.theme-fan-fiction .chapter-heading::before,.theme-fan-fiction .chapter-heading::after{content:"✦";padding:0 10px;color:#7ccfd9}
+  </style></head><body class="${categoryClass.trim()}"><main><h1>${escapeHtml(work.title || "Untitled work")}</h1><section class="document-body">${documentToHtml(work.contentJSON)}</section>${sideNotesAppendix(notes)}</main></body></html>`;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -282,6 +478,13 @@ function exportWord(work: Work, notes: SideNote[] = []) {
   downloadBlob(
     new Blob([workDocumentHtml(work, false, notes)], { type: "application/msword;charset=utf-8" }),
     `${safeFileName(work.title)}.doc`,
+  );
+}
+
+function exportPlainText(work: Work) {
+  downloadBlob(
+    new Blob([documentToPlainText(work.contentJSON)], { type: "text/plain;charset=utf-8" }),
+    `${safeFileName(work.title)}.txt`,
   );
 }
 
@@ -360,10 +563,33 @@ function useRetroSound() {
 
 export default function WriterApp() {
   const { path, navigate } = useLocalRouter();
+  const [themeMode, setThemeMode] = useState<ThemeMode>("original");
+  const [themeReady, setThemeReady] = useState(false);
 
   useEffect(() => {
     registerPwa();
+    const storedTheme = window.localStorage.getItem("personal-writer-os-theme");
+    if (storedTheme === "original" || storedTheme === "day" || storedTheme === "night") {
+      setThemeMode(storedTheme);
+    }
+    setThemeReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!themeReady) return;
+    const skin = {
+      original: "original",
+      day: "crystal-soda",
+      night: "blue-hour",
+    }[themeMode];
+    document.documentElement.dataset.skin = skin;
+    window.localStorage.setItem("personal-writer-os-theme", themeMode);
+    window.localStorage.removeItem("personal-writer-os-color-mode");
+    window.localStorage.removeItem("personal-writer-os-skin");
+    // Keep native controls in light rendering; the app supplies its own night palette.
+    // This avoids browsers with forced-dark behavior dimming the whole Y2K desktop twice.
+    document.documentElement.style.colorScheme = "light";
+  }, [themeMode, themeReady]);
 
   const route = useMemo(() => {
     const settlement = path.match(
@@ -393,7 +619,13 @@ export default function WriterApp() {
 
   return (
     <div className={isEditor ? "app-shell app-shell--editor" : "app-shell"}>
-      <Header path={path} navigate={navigate} compact={isEditor} />
+      <Header
+        path={path}
+        navigate={navigate}
+        compact={isEditor}
+        themeMode={themeMode}
+        onThemeChange={setThemeMode}
+      />
       {!isEditor && <DesktopChrome path={path} navigate={navigate} />}
       <main className={isEditor ? "main main--editor" : "main"}>
         {route.name === "home" && <HomePage navigate={navigate} />}
@@ -450,10 +682,14 @@ function Header({
   path,
   navigate,
   compact,
+  themeMode,
+  onThemeChange,
 }: {
   path: string;
   navigate: Navigate;
   compact: boolean;
+  themeMode: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
 }) {
   const navItems = [
     { label: "Home", href: "/" },
@@ -498,8 +734,57 @@ function Header({
           })}
         </nav>
       )}
-      <DataMenu />
+      <div className="header-actions">
+        <ThemeMenu themeMode={themeMode} onThemeChange={onThemeChange} />
+        <DataMenu />
+      </div>
     </header>
+  );
+}
+
+function ThemeMenu({
+  themeMode,
+  onThemeChange,
+}: {
+  themeMode: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
+}) {
+  const themes: Array<{ value: ThemeMode; label: string; glyph: string }> = [
+    { value: "original", label: "Original", glyph: "▣" },
+    { value: "day", label: "Day", glyph: "☼" },
+    { value: "night", label: "Night", glyph: "☾" },
+  ];
+
+  const chooseTheme = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    theme: ThemeMode,
+  ) => {
+    onThemeChange(theme);
+    event.currentTarget.closest("details")?.removeAttribute("open");
+  };
+
+  return (
+    <DismissibleDetails
+      className="theme-menu"
+      summary={<span aria-hidden="true">☾</span>}
+      summaryAriaLabel="Choose appearance"
+    >
+      <div className="theme-menu-panel" aria-label="Appearance themes">
+        <strong>Appearance</strong>
+        {themes.map((theme) => (
+          <button
+            key={theme.value}
+            type="button"
+            className={themeMode === theme.value ? "is-active" : ""}
+            aria-pressed={themeMode === theme.value}
+            onPointerUp={(event) => chooseTheme(event, theme.value)}
+          >
+            <span aria-hidden="true">{theme.glyph}</span>
+            {theme.label}
+          </button>
+        ))}
+      </div>
+    </DismissibleDetails>
   );
 }
 
@@ -998,6 +1283,11 @@ function WorksPage({ navigate }: { navigate: Navigate }) {
 function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
   const [dialog, setDialog] = useState<"delete" | "export" | null>(null);
   const [includeSideNotes, setIncludeSideNotes] = useState(false);
+  const exportSections = useMemo(() => chapterSections(work.contentJSON), [work.contentJSON]);
+  const [selectedSectionIds, setSelectedSectionIds] = useState<Set<string>>(
+    () => new Set(exportSections.map((section) => section.id)),
+  );
+  const [exportMessage, setExportMessage] = useState("");
   const sideNotes = useLiveQuery(
     () => db.sideNotes.where("workId").equals(work.id).toArray(),
     [work.id],
@@ -1013,6 +1303,39 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
     [work.id],
   );
   const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (dialog === "export") {
+      setSelectedSectionIds(new Set(exportSections.map((section) => section.id)));
+      setExportMessage("");
+    }
+  }, [dialog, exportSections]);
+
+  const selectedExportWork = useMemo(() => {
+    const contentJSON = contentForSections(exportSections, selectedSectionIds);
+    const plainText = documentToPlainText(contentJSON);
+    return {
+      ...work,
+      contentJSON,
+      plainText,
+      wordCount: countWords(plainText),
+    };
+  }, [exportSections, selectedSectionIds, work]);
+
+  const toggleExportSection = (id: string) => {
+    setSelectedSectionIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const copyExportText = async () => {
+    if (!selectedExportWork.plainText) return;
+    await navigator.clipboard.writeText(selectedExportWork.plainText);
+    setExportMessage("Body copied");
+  };
 
   const confirmDelete = async () => {
     if (deleting || activeSession) return;
@@ -1088,7 +1411,22 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
             ) : (
               <>
                 <h2>Export “{work.title || "Untitled work"}”</h2>
-                <p>Word stays clean and editable. PDF can be clean or keep this writing type’s visual theme.</p>
+                <p>Choose the chapters you want, then copy clean body text or export an editable or printable file.</p>
+                {exportSections.length > 1 && (
+                  <fieldset className="export-chapters">
+                    <legend>Export range</legend>
+                    {exportSections.map((section) => (
+                      <label key={section.id}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSectionIds.has(section.id)}
+                          onChange={() => toggleExportSection(section.id)}
+                        />
+                        <span>{section.title}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
                 {!!sideNotes.length && (
                   <label className="export-side-notes">
                     <input
@@ -1100,10 +1438,13 @@ function WorkCard({ work, navigate }: { work: Work; navigate: Navigate }) {
                   </label>
                 )}
                 <div className="export-options">
-                  <button className="button button--secondary" onClick={() => exportWord(work, includeSideNotes ? sideNotes : [])}>Word (.doc)</button>
-                  <button className="button button--secondary" onClick={() => exportPdf(work, false, includeSideNotes ? sideNotes : [])}>Clean PDF</button>
-                  <button className="button button--primary" onClick={() => exportPdf(work, true, includeSideNotes ? sideNotes : [])}>Themed PDF</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={copyExportText}>Copy body</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportPlainText(selectedExportWork)}>Text (.txt)</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportWord(selectedExportWork, includeSideNotes ? sideNotes : [])}>Word (.doc)</button>
+                  <button className="button button--secondary" disabled={!selectedSectionIds.size} onClick={() => exportPdf(selectedExportWork, false, includeSideNotes ? sideNotes : [])}>Clean PDF</button>
+                  <button className="button button--primary" disabled={!selectedSectionIds.size} onClick={() => exportPdf(selectedExportWork, true, includeSideNotes ? sideNotes : [])}>Themed PDF</button>
                 </div>
+                {exportMessage && <small className="export-message" role="status">{exportMessage}</small>}
               </>
             )}
           </section>
@@ -1290,6 +1631,7 @@ function WritingWorkspace({
   recovered: boolean;
   navigate: Navigate;
 }) {
+  const floatingLayerTarget = useFloatingLayerTarget();
   const [title, setTitle] = useState(initialWork.title);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "dirty">(
     recovered ? "dirty" : "saved",
@@ -1299,6 +1641,11 @@ function WritingWorkspace({
   const [typingSignal, setTypingSignal] = useState(0);
   const [tags, setTags] = useState(initialWork.tags ?? []);
   const [tagDraft, setTagDraft] = useState("");
+  const [chapterItems, setChapterItems] = useState(() =>
+    chapterSections(initialWork.contentJSON)
+      .filter((section) => section.hasHeading)
+      .map(({ id, title }) => ({ id, title })),
+  );
   const [settlementSession, setSettlementSession] =
     useState<WritingSession | null>(null);
   const latestRef = useRef({
@@ -1328,6 +1675,7 @@ function WritingWorkspace({
     immediatelyRender: false,
     extensions: [
       StarterKit.configure({ link: false }),
+      ChapterBreak,
       TextStyle,
       FontSize,
       Color,
@@ -1372,6 +1720,11 @@ function WritingWorkspace({
     onUpdate({ editor: currentEditor }) {
       const plainText = currentEditor.getText({ blockSeparator: "\n" });
       const nextWordCount = countWords(plainText);
+      setChapterItems(
+        chapterSections(currentEditor.getJSON())
+          .filter((section) => section.hasHeading)
+          .map(({ id, title }) => ({ id, title })),
+      );
       latestRef.current = {
         ...latestRef.current,
         contentJSON: currentEditor.getJSON(),
@@ -1473,6 +1826,11 @@ function WritingWorkspace({
   const applySnapshot = (snapshot: WorkSnapshot) => {
     if (!editor) return;
     editor.commands.setContent(snapshot.contentJSON);
+    setChapterItems(
+      chapterSections(snapshot.contentJSON)
+        .filter((section) => section.hasHeading)
+        .map(({ id, title }) => ({ id, title })),
+    );
     setTitle(snapshot.title);
     latestRef.current = {
       title: snapshot.title,
@@ -1592,8 +1950,9 @@ function WritingWorkspace({
               />
             </label>
           </div>
-          <EditorToolbar editor={editor} />
+          <EditorToolbar editor={editor} chapters={chapterItems} showChapterControls />
           <EditorContent editor={editor} />
+          <EditorContextMenu editor={editor} category={initialWork.category} />
           <div className="paper-footer">
             <span>{wordCount} words</span>
             <span>{saveStatus === "saved" ? "Saved locally" : "Saving…"}</span>
@@ -1609,15 +1968,16 @@ function WritingWorkspace({
         />
         <SideNotesPanel workId={initialWork.id} />
       </div>
-      {settlementSession && (
-        <div className="settlement-overlay">
+      {settlementSession && floatingLayerTarget && createPortal(
+        <div className={`settlement-overlay theme-${initialWork.category}`}>
           <SettlementForm
             session={settlementSession}
             work={{ ...initialWork, title, wordCount }}
             navigate={navigate}
             onReturn={() => setSettlementSession(null)}
           />
-        </div>
+        </div>,
+        floatingLayerTarget,
       )}
     </div>
   );
@@ -2002,8 +2362,12 @@ function SnapshotMenu({
 
 function EditorToolbar({
   editor,
+  chapters = [],
+  showChapterControls = false,
 }: {
   editor: Editor | null;
+  chapters?: { id: string; title: string }[];
+  showChapterControls?: boolean;
 }) {
   if (!editor) return <div className="editor-toolbar" aria-hidden="true" />;
 
@@ -2021,6 +2385,36 @@ function EditorToolbar({
       .extendMarkRange("link")
       .setLink({ href: url.trim() })
       .run();
+  };
+
+  const insertChapter = () => {
+    const title = window.prompt("Chapter title", "New chapter");
+    if (title === null) return;
+    editor
+      .chain()
+      .focus()
+      .insertContent([
+        {
+          type: "chapterBreak",
+          attrs: { id: crypto.randomUUID(), title: title.trim() || "New chapter" },
+        },
+        { type: "paragraph" },
+      ])
+      .run();
+  };
+
+  const jumpToChapter = (id: string) => {
+    let targetPosition: number | null = null;
+    editor.state.doc.descendants((node, position) => {
+      if (node.type.name === "chapterBreak" && node.attrs.id === id) {
+        targetPosition = position;
+        return false;
+      }
+      return targetPosition === null;
+    });
+    if (targetPosition !== null) {
+      editor.chain().focus().setNodeSelection(targetPosition).scrollIntoView().run();
+    }
   };
 
   return (
@@ -2066,6 +2460,31 @@ function EditorToolbar({
       <button onClick={setLink} aria-label="Insert web link" title="Insert web link">
         Link
       </button>
+      {showChapterControls && (
+        <>
+          <span className="toolbar-divider" />
+          <button onClick={insertChapter} aria-label="Insert chapter break" title="Insert chapter break">
+            ＋ Chapter
+          </button>
+          {!!chapters.length && (
+            <label className="toolbar-select chapter-jump">
+              <span className="sr-only">Jump to chapter</span>
+              <select
+                value=""
+                onChange={(event) => {
+                  if (event.target.value) jumpToChapter(event.target.value);
+                }}
+                aria-label="Jump to chapter"
+              >
+                <option value="">Jump to…</option>
+                {chapters.map((chapter) => (
+                  <option key={chapter.id} value={chapter.id}>{chapter.title}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </>
+      )}
       <span className="toolbar-divider" />
       <label className="toolbar-select">
         <span className="sr-only">Font size</span>
@@ -2085,16 +2504,16 @@ function EditorToolbar({
       <button
         className="color-button color-button--black"
         onClick={() => editor.chain().focus().setColor("#282724").run()}
-        aria-label="Black text"
-        title="Black text"
+        aria-label="Primary text color"
+        title="Primary text color"
       >
         A
       </button>
       <button
         className="color-button color-button--gray"
         onClick={() => editor.chain().focus().setColor("#a6a29b").run()}
-        aria-label="Gray text"
-        title="Gray text"
+        aria-label="Muted text color"
+        title="Muted text color"
       >
         A
       </button>
@@ -2136,6 +2555,86 @@ function EditorToolbar({
         ↷
       </button>
     </div>
+  );
+}
+
+function EditorContextMenu({
+  editor,
+  category,
+}: {
+  editor: Editor | null;
+  category: WorkCategory;
+}) {
+  const floatingLayerTarget = useFloatingLayerTarget();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const placeMenu = useCallback((x: number, y: number) => {
+    const width = Math.min(390, window.innerWidth - 16);
+    const height = 168;
+    setPosition({
+      x: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
+      y: Math.max(66, Math.min(y, window.innerHeight - height - 8)),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!editor) return;
+    const editorElement = editor.view.dom;
+
+    const openAtPointer = (event: MouseEvent) => {
+      event.preventDefault();
+      const location = editor.view.posAtCoords({ left: event.clientX, top: event.clientY });
+      if (location) {
+        const { from, to } = editor.state.selection;
+        if (location.pos < from || location.pos > to) {
+          editor.commands.setTextSelection(location.pos);
+        }
+      }
+      placeMenu(event.clientX, event.clientY);
+    };
+    const closeFromOutside = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setPosition(null);
+      }
+    };
+    const closeFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPosition(null);
+    };
+    const closeFromViewportChange = () => setPosition(null);
+
+    editorElement.addEventListener("contextmenu", openAtPointer);
+    document.addEventListener("pointerdown", closeFromOutside);
+    window.addEventListener("resize", closeFromViewportChange);
+    window.addEventListener("scroll", closeFromViewportChange, true);
+    window.addEventListener("keydown", closeFromKeyboard);
+    return () => {
+      editorElement.removeEventListener("contextmenu", openAtPointer);
+      document.removeEventListener("pointerdown", closeFromOutside);
+      window.removeEventListener("resize", closeFromViewportChange);
+      window.removeEventListener("scroll", closeFromViewportChange, true);
+      window.removeEventListener("keydown", closeFromKeyboard);
+    };
+  }, [editor, placeMenu]);
+
+  if (!editor || !floatingLayerTarget || !position) return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={`editor-context-menu theme-${category}`}
+      style={{ left: position.x, top: position.y }}
+      role="dialog"
+      aria-label="Text formatting menu"
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="editor-context-menu-titlebar">
+        <span>format.txt</span>
+        <button onClick={() => setPosition(null)} aria-label="Close formatting menu">×</button>
+      </div>
+      <EditorToolbar editor={editor} showChapterControls />
+    </div>,
+    floatingLayerTarget,
   );
 }
 
@@ -3054,10 +3553,10 @@ function DashboardPage({ navigate }: { navigate: Navigate }) {
       const start = angle;
       angle += (item.words / categoryTotal) * 360;
       const colors: Record<WorkCategory, string> = {
-        "social-insight": "#8290aa",
-        "life-essay": "#d5b37b",
-        review: "#6f6878",
-        "fan-fiction": "#c99db8",
+        "social-insight": "#287fd1",
+        "life-essay": "#f0b64d",
+        review: "#8b4e93",
+        "fan-fiction": "#ec4fa5",
       };
       return `${colors[item.category]} ${start}deg ${angle}deg`;
     })

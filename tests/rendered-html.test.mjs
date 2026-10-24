@@ -42,9 +42,10 @@ test("the catch-all route supports direct editor navigation", async () => {
 });
 
 test("ships the local-first application and PWA assets", async () => {
-  const [app, layout, manifest, serviceWorker] = await Promise.all([
+  const [app, layout, finalCss, manifest, serviceWorker] = await Promise.all([
     readFile(new URL("../app/WriterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/final.css", import.meta.url), "utf8"),
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
   ]);
@@ -57,14 +58,22 @@ test("ships the local-first application and PWA assets", async () => {
   assert.match(app, /function WritingReminder/);
   assert.match(app, /Preview reminder/);
   assert.match(app, /settlement-overlay/);
+  assert.match(app, /document-body/);
+  assert.match(app, /\.document-body\{line-height:32px\}/);
+  assert.match(finalCss, /\.ProseMirror p,\.prose-editor p \{ min-height:32px; margin:0; line-height:32px; \}/);
+  assert.match(finalCss, /transparent 0 31px,rgba\(121,83,43,\.16\) 31px 32px/);
   assert.match(app, /function MaterialsPage/);
   assert.match(app, /function DashboardPage/);
   assert.match(app, /parseTags/);
   assert.match(layout, /Personal Writer OS/);
   assert.match(layout, /manifest\.webmanifest/);
   assert.equal(JSON.parse(manifest).display, "standalone");
-  assert.match(serviceWorker, /personal-writer-os-v7/);
-  assert.match(serviceWorker, /url\.pathname\.startsWith\("\/assets\/"\)/);
+  assert.match(serviceWorker, /personal-writer-os-v11/);
+  assert.match(app, /ChapterBreak/);
+  assert.match(app, /Copy body/);
+  assert.match(app, /Export range/);
+  assert.match(serviceWorker, /buildAssets/);
+  assert.match(serviceWorker, /caches\.match\(request\)/);
   await Promise.all([
     access(new URL("../public/icon-192.png", import.meta.url)),
     access(new URL("../public/icon-512.png", import.meta.url)),

@@ -1,4 +1,7 @@
-const CACHE_NAME = "personal-writer-os-v7";
+const CACHE_NAME = "personal-writer-os-v11";
+const IS_LOCAL_PREVIEW = ["localhost", "127.0.0.1", "::1"].includes(
+  self.location.hostname,
+);
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -11,10 +14,24 @@ const APP_SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  if (IS_LOCAL_PREVIEW) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
+
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then(async (cache) => {
+        await cache.addAll(APP_SHELL);
+        const shell = await cache.match("/");
+        if (!shell) return;
+        const html = await shell.text();
+        const buildAssets = Array.from(
+          new Set(html.match(/\/assets\/[^\"'<>\s]+/g) ?? []),
+        );
+        await Promise.allSettled(buildAssets.map((path) => cache.add(path)));
+      })
       .then(() => self.skipWaiting()),
   );
 });
@@ -26,7 +43,11 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key !== CACHE_NAME)
+            .filter((key) =>
+              IS_LOCAL_PREVIEW
+                ? key.startsWith("personal-writer-os-")
+                : key !== CACHE_NAME,
+            )
             .map((key) => caches.delete(key)),
         ),
       )
@@ -35,6 +56,8 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  if (IS_LOCAL_PREVIEW) return;
+
   const request = event.request;
   if (request.method !== "GET") return;
 
@@ -55,11 +78,6 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname === "/sw.js") return;
-
-  // Content-hashed build assets are served and cached by the host. Letting an
-  // older service worker answer these requests can pair stale HTML with files
-  // from a previous deployment and leave the app unstyled.
-  if (url.pathname.startsWith("/assets/")) return;
 
   event.respondWith(
     caches.match(request).then((cached) => {
